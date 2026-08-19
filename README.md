@@ -82,6 +82,24 @@ composer analyse   # phpstan
 composer test      # phpunit
 ```
 
+## リリース手順
+
+このリポジトリ自身にはタグ push で配布物を組み立てる release.yml が無い(`plugin-release.yml` は他リポジトリが `workflow_call` で使う側)。リリースは以下の手順を**必ず順番通りに**踏む。
+
+1. `loader.php` の `l2dwpghul_updater_register()` 第一引数(自己申告バージョン、例 `'1.0.3'`)を新しいバージョンに手動で書き換える。他の変更と混ぜず、専用コミットにする(過去の実績: `loader.phpの自己申告バージョンを1.0.3へ更新`)
+2. 横断検索して、他に現在バージョンを指す表記が残っていないか確認する(`grep -rn "<旧バージョン>" . --exclude-dir=vendor --exclude-dir=.git`)。ヒットが無いことを確認済み(コード内には他に現在バージョン表記は無い設計)
+3. PR を作成し、CI(PHP 構文チェック・PHPCS・PHPStan・PHPUnit)を通してから `main` にマージする
+4. タグを打って push する: `git tag vX.Y.Z && git push origin vX.Y.Z`
+5. **`release-version-check.yml` が成功することを確認する** — タグ push で自動起動し、`loader.php` の自己申告バージョンとタグが一致しないと `::error::` で失敗する。このリポジトリでタグを打つ際の**唯一の自動ゲート**なので、ここで失敗したら Release を作らず先に修正する
+6. `gh release create vX.Y.Z --title vX.Y.Z --notes "..."` で GitHub Release を手動作成する(ライブラリであり配布用 ZIP は不要なので、ビルド・アセット添付は行わない)
+
+### 利用側プラグインへの反映
+
+このライブラリをリリースしただけでは、同梱している各プラグイン(FAUC など)には自動反映されない。追従する場合は、利用側プラグインのリポジトリで以下の2箇所を更新する:
+
+- `release.yml` の `uses: lunaluna/l2d-wp-github-update-lib/.github/workflows/plugin-release.yml@vX.Y.Z` の参照タグ
+- `git subtree pull --prefix=lib/l2d-updater https://github.com/lunaluna/l2d-wp-github-update-lib.git vX.Y.Z --squash` でベンダーコピー(`lib/l2d-updater/`)を更新
+
 ## ライセンス
 
 GPL-2.0-or-later
