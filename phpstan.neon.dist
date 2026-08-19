@@ -1,0 +1,16 @@
+parameters:
+	level: 5
+	paths:
+		- loader.php
+		- class-l2d-github-updater.php
+	excludePaths:
+		- vendor/*
+	ignoreErrors:
+		# update_plugins トランジェントは stdClass に動的にプロパティが生えるため
+		# 型情報を持たず、response / no_update への代入は WordPress 更新機構の
+		# 定型的な書き方（コアや他プラグインの実装でも同様）.
+		- '#^Access to an undefined property object::\$response\.$#'
+		- '#^Access to an undefined property object::\$no_update\.$#'
+
+includes:
+	- vendor/szepeviktor/phpstan-wordpress/extension.neon
