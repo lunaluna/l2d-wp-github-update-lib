@@ -1,0 +1,40 @@
+name: Release version check
+
+# loader.php の l2dwpghul_updater_register() 呼び出しに埋め込まれた
+# 自己申告バージョン文字列(例 '1.0.2')は、複数プラグインが異なる版の
+# このライブラリを同梱していても最新版だけが起動する、というバージョン
+# 交渉ロジックの判定基準そのもの(loader.php 参照)。この文字列は各
+# リリースで手動編集されており、タグ付け時にそれを検証する仕組みが
+# これまで無かった(このリポジトリ自身にタグ push で動く release.yml が
+# 存在しないため)。更新を忘れると、古いライブラリコードが新しいコードより
+# 「新しい」と誤認識され、静かに勝ち続ける実害につながる。
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-loader-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify loader.php's self-reported version matches the tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+
+          LOADER_VERSION=$(grep -E "l2dwpghul_updater_register\( '" loader.php \
+            | head -n1 | sed -E "s/^[^']*'([^']+)'.*/\1/")
+
+          echo "Tag:                      $TAG"
+          echo "loader.php self-reported version: $LOADER_VERSION"
+
+          if [ "$LOADER_VERSION" != "$VERSION" ]; then
+            echo "::error::loader.php の自己申告バージョン ($LOADER_VERSION) がタグ ($VERSION) と一致しません。l2dwpghul_updater_register() の第一引数を更新してください。"
+            exit 1
+          fi
