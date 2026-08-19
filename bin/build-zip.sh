@@ -10,7 +10,9 @@
 #
 # SLUG はカレントディレクトリ名から解決する(ハードコードしない)。
 # 除外定義は .distignore を単一の正とし、release.yml 経由の composite
-# action もこのスクリプトと同じ .distignore を読む。
+# action もこのスクリプトと同じ .distignore を読む。ただしこのスクリプト自身の
+# 生成物({slug}.{version}.zip)だけは、利用側の .distignore の内容に依存せず
+# スクリプト側で必ず除外する(理由は rsync 実行箇所のコメントを参照)。
 #
 # composer install --no-dev や追加ライブラリの同梱など、プラグイン固有の
 # 前処理は、利用側に bin/build-zip.pre.sh があればステージング前に実行する
@@ -55,7 +57,13 @@ mkdir -p "${STAGE}/${SLUG}"
 # (--exclude-from がコメント行をどう扱うかは未検証のため、依存しない).
 grep -vE '^[[:space:]]*(#|$)' .distignore > "${STAGE}/excludes.txt"
 
-rsync -a --exclude-from="${STAGE}/excludes.txt" ./ "${STAGE}/${SLUG}/"
+# このスクリプトは生成物をプラグインルートに置くため、同じ作業ツリーで 2 回
+# ビルドすると 1 回目の ZIP が 2 回目の ZIP に入れ子で同梱されてしまう
+# (バージョンを上げて再ビルドしたときは、古い版の ZIP が丸ごと入り込む)。
+# 利用側の .distignore に *.zip があるかどうかに関わらず起きるため、ここで
+# 必ず除外する。先頭の / は転送ルート(プラグインルート)へのアンカーなので、
+# プラグインが意図的に同梱する assets/**/*.zip などには影響しない。
+rsync -a --exclude-from="${STAGE}/excludes.txt" --exclude="/${SLUG}.*.zip" ./ "${STAGE}/${SLUG}/"
 
 ZIP_NAME="${SLUG}.${VERSION}.zip"
 
