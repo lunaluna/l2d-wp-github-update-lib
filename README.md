@@ -9,8 +9,8 @@ wp.org に掲載していないプラグインでも、GitHub Releases を版元
 利用側プラグインのメインファイルで、ローダーを読み込んでから設定を登録する。
 
 ```php
-$l2d_updater_register = require plugin_dir_path( __FILE__ ) . 'lib/l2d-updater/loader.php';
-$l2d_updater_register( array(
+$l2dwpghul_updater_register = require plugin_dir_path( __FILE__ ) . 'lib/l2d-updater/loader.php';
+$l2dwpghul_updater_register( array(
 	'plugin_file' => __FILE__,
 	'github_repo' => 'lunaluna/your-plugin-repo',
 ) );
@@ -18,7 +18,7 @@ $l2d_updater_register( array(
 
 `loader.php` は `require`(`require_once` ではない)する。戻り値はこのコピー固有のバージョンとファイルパスをクロージャでキャプチャした登録関数で、それを呼ぶと初めて設定が登録される。複数のプラグインが異なるバージョンの同梱コピーを持っていても、実行時に最も新しいバージョンのコピーだけが起動する(バージョン交渉)。
 
-グローバル定数(例 `L2D_UPDATER_LIB_VERSION`)でバージョンを渡さない理由: 複数コピーが同じ定数名を `define` しようとすると、最初に読み込まれたコピーの値で固定され、後続のコピーが自分の実際のバージョンを報告できなくなり、バージョン交渉が壊れるため。
+グローバル定数(例 `L2DWPGHUL_UPDATER_LIB_VERSION`)でバージョンを渡さない理由: 複数コピーが同じ定数名を `define` しようとすると、最初に読み込まれたコピーの値で固定され、後続のコピーが自分の実際のバージョンを報告できなくなり、バージョン交渉が壊れるため。
 
 ### 設定キー
 
@@ -29,7 +29,7 @@ $l2d_updater_register( array(
 | `slug` | | `dirname( plugin_basename( $plugin_file ) )` |
 | `name` | | ヘッダー `Plugin Name` |
 | `author` | | ヘッダー `Author` を `Author URI` でリンク化 |
-| `cache_key` | | `'l2d_updater_' . md5( $github_repo )` |
+| `cache_key` | | `'l2dwpghul_updater_' . md5( $github_repo )` |
 | `filter_prefix` | | なし(ライブラリ共通フィルタのみ) |
 | `cache_ttl` | | `21600` |
 | `backoff_ttl` | | `1800` |
@@ -44,7 +44,7 @@ $l2d_updater_register( array(
 ライブラリ共通名を正とし、第 2 引数に `$slug` を渡す。`filter_prefix` を設定すると旧名でも同じ値をフィルタできる(後方互換用)。
 
 ```php
-$enabled = apply_filters( 'l2d_updater_enabled', true, $slug );
+$enabled = apply_filters( 'l2dwpghul_updater_enabled', true, $slug );
 if ( $filter_prefix ) {
 	$enabled = apply_filters( "{$filter_prefix}_github_updater_enabled", $enabled );
 }
@@ -60,9 +60,9 @@ if ( $filter_prefix ) {
 
 以下は初版で固定し、後方互換のため変更しない。
 
-1. `l2d_updater_register( $version, $class_file, array $config )` の引数を増やさない。拡張は `$config` のキー追加で行う
+1. `l2dwpghul_updater_register( $version, $class_file, array $config )` の引数を増やさない。拡張は `$config` のキー追加で行う
 2. ローダーは `$config` を検証も加工もせず素通しする
-3. クラス名は `L2d_GitHub_Updater` 固定。コンストラクタは `array $config` 1 引数
+3. クラス名は `L2dwpghul_GitHub_Updater` 固定。コンストラクタは `array $config` 1 引数
 4. `plugins_loaded` 優先度 `-100` で起動する
 5. `loader.php` は `require` の戻り値として `array $config` を受け取る callable を返す。この形を変えない(グローバル定数は使わない)
 
