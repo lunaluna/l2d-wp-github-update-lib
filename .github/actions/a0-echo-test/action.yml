@@ -1,0 +1,14 @@
+name: 'A0 echo test'
+description: 'Step A0 の実測用。別リポジトリの composite action を uses: owner/repo/.github/actions/dir@ref で参照できるかだけを確認する使い捨てアクション。検証後に削除予定。'
+inputs:
+  message:
+    description: 'echo するメッセージ'
+    required: false
+    default: 'hello from l2d-wp-github-update-lib composite action'
+runs:
+  using: 'composite'
+  steps:
+    - shell: bash
+      run: |
+        echo "composite action reached: ${{ inputs.message }}"
+        echo "runner repo (caller context expected): ${{ github.repository }}"

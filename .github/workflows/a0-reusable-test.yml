@@ -1,0 +1,30 @@
+name: A0 reusable test
+
+# Step A0 の実測用。別リポジトリから workflow_call で呼ばれたとき、
+# 1) actions/checkout がデフォルトで caller リポジトリを取得するか
+# 2) github コンテキストが caller のものになるか
+# を確認するための使い捨て reusable workflow。検証後に削除予定。
+
+on:
+  workflow_call:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show github context before checkout
+        run: |
+          echo "github.repository = ${{ github.repository }}"
+          echo "github.workflow_ref = ${{ github.workflow_ref }}"
+
+      - name: checkout with defaults
+        uses: actions/checkout@v4
+
+      - name: Show checked out repo contents
+        run: |
+          echo "--- pwd ---"
+          pwd
+          echo "--- ls -la ---"
+          ls -la
+          echo "--- git remote -v (if any) ---"
+          git remote -v || true
