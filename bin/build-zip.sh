@@ -17,6 +17,12 @@
 # composer install --no-dev や追加ライブラリの同梱など、プラグイン固有の
 # 前処理は、利用側に bin/build-zip.pre.sh があればステージング前に実行する
 # (WPMAR の Action Scheduler 同梱のようなニーズに対応する).
+#
+# このスクリプト自身が置かれている bin/ ディレクトリ(= ライブラリのビルド用
+# ディレクトリ)は配布物に不要なので、利用側の .distignore の記載に関わらず
+# 必ず除外する(*.zip 入れ子除外と同じ理屈。利用側の除外設定に依存させない)。
+# --prefix をハードコードせず ${BASH_SOURCE[0]} から実際の配置を求めるため、
+# lib/l2d-updater 以外のディレクトリ名で同梱されていても効く。
 
 set -euo pipefail
 
@@ -57,13 +63,27 @@ mkdir -p "${STAGE}/${SLUG}"
 # (--exclude-from がコメント行をどう扱うかは未検証のため、依存しない).
 grep -vE '^[[:space:]]*(#|$)' .distignore > "${STAGE}/excludes.txt"
 
+# ライブラリのビルド用ディレクトリ(このスクリプトが置かれている bin/)を
+# プラグインルートからの相対パスで求める。ライブラリがプラグインルート配下
+# に無い場合(このライブラリ自身のリポジトリで実行した場合など)は、相対パス
+# が求まらないため追加除外なしにフォールバックする。
+LIB_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+PLUGIN_ROOT="$(pwd -P)"
+
+EXCLUDE_ARGS=(--exclude-from="${STAGE}/excludes.txt" --exclude="/${SLUG}.*.zip")
+
+if [[ "$LIB_BIN_DIR" == "$PLUGIN_ROOT"/* ]]; then
+  REL_LIB_BIN_DIR="${LIB_BIN_DIR#"$PLUGIN_ROOT"/}"
+  EXCLUDE_ARGS+=(--exclude="/${REL_LIB_BIN_DIR}")
+fi
+
 # このスクリプトは生成物をプラグインルートに置くため、同じ作業ツリーで 2 回
 # ビルドすると 1 回目の ZIP が 2 回目の ZIP に入れ子で同梱されてしまう
 # (バージョンを上げて再ビルドしたときは、古い版の ZIP が丸ごと入り込む)。
 # 利用側の .distignore に *.zip があるかどうかに関わらず起きるため、ここで
 # 必ず除外する。先頭の / は転送ルート(プラグインルート)へのアンカーなので、
 # プラグインが意図的に同梱する assets/**/*.zip などには影響しない。
-rsync -a --exclude-from="${STAGE}/excludes.txt" --exclude="/${SLUG}.*.zip" ./ "${STAGE}/${SLUG}/"
+rsync -a "${EXCLUDE_ARGS[@]}" ./ "${STAGE}/${SLUG}/"
 
 ZIP_NAME="${SLUG}.${VERSION}.zip"
 
