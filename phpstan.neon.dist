@@ -1,8 +1,8 @@
 parameters:
 	level: 5
 	paths:
-		- loader.php
-		- class-l2d-github-updater.php
+		- dist/loader.php
+		- dist/class-l2d-github-updater.php
 	excludePaths:
 		- vendor/*
 	ignoreErrors:

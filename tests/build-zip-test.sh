@@ -12,17 +12,21 @@
 #   5. 前回のビルドで残った生成物が、次の ZIP に入れ子で同梱されない
 #      (同一バージョンの生成物と、バージョンを上げる前の古い生成物の両方)
 #   6. 一方で、プラグインが意図的に同梱する ZIP(assets/ 配下など)は残る
+#   7. 利用側の .distignore に bin 行が無くても、ライブラリ自身の bin/
+#      ディレクトリ(= このビルダーが置かれているディレクトリ)は除外される
+#      (シナリオ2。実際の subtree pull 後の配置 lib/l2d-updater/bin/ を再現)
 #
 # 5 は利用側の .distignore に *.zip が無い状態で検証する。これはスクリプト側の
 # 責務として保証すべき挙動であり、利用側の除外設定に依存させないため。
 # 6 は生成物の除外パターンを転送ルートにアンカーした狭いものにしている根拠.
+# 7 は同様に、利用側の除外設定に依存させないという設計方針の検証.
 #
 # 実行方法: リポジトリルートで `bash tests/build-zip-test.sh`
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILDER="${REPO_ROOT}/bin/build-zip.sh"
+BUILDER="${REPO_ROOT}/dist/bin/build-zip.sh"
 
 if [ ! -f "$BUILDER" ]; then
 	echo "Error: ${BUILDER} が見つかりません." >&2
@@ -182,6 +186,71 @@ for included in \
 		fail "同梱されるべき ${included} が無い"
 	fi
 done
+
+# ---- シナリオ2: 利用側の .distignore に bin 行が無い場合 --------------------
+#
+# 実際の subtree pull 後の配置(lib/l2d-updater/bin/build-zip.sh)を再現し、
+# .distignore に bin 行が無くてもライブラリ自身の bin/ が除外されることを見る.
+
+echo
+echo "シナリオ2: .distignore に bin 行が無い場合"
+
+SLUG2='fake-consumer-plugin-2'
+VERSION2='2.0.0'
+ZIP_NAME2="${SLUG2}.${VERSION2}.zip"
+PLUGIN_DIR2="${WORK}/${SLUG2}"
+
+mkdir -p \
+	"${PLUGIN_DIR2}/lib/l2d-updater/bin" \
+	"${PLUGIN_DIR2}/vendor"
+
+cat > "${PLUGIN_DIR2}/${SLUG2}.php" << 'PHP'
+<?php
+/**
+ * Plugin Name:       Fake Consumer Plugin 2
+ * Version:           2.0.0
+ * Update URI:        false
+ */
+PHP
+
+echo 'readme' > "${PLUGIN_DIR2}/readme.txt"
+echo '<?php // shipped' > "${PLUGIN_DIR2}/lib/l2d-updater/loader.php"
+echo '<?php // dev only' > "${PLUGIN_DIR2}/vendor/autoload.php"
+
+# ライブラリ自身のビルダーを、実際の subtree pull 後と同じ配置に置く.
+cp "$BUILDER" "${PLUGIN_DIR2}/lib/l2d-updater/bin/build-zip.sh"
+
+# bin 行を意図的に含めない。ライブラリ自身の bin/ 除外がスクリプト側の責務で
+# あることを検証する.
+cat > "${PLUGIN_DIR2}/.distignore" << 'DISTIGNORE'
+.git
+.github
+.distignore
+vendor
+composer.json
+DISTIGNORE
+
+cd "$PLUGIN_DIR2"
+bash lib/l2d-updater/bin/build-zip.sh
+
+if [ ! -f "$ZIP_NAME2" ]; then
+	echo "  NG  : シナリオ2のビルドで ${ZIP_NAME2} が生成されなかった" >&2
+	exit 1
+fi
+
+ENTRIES2="$(unzip -Z1 "$ZIP_NAME2")"
+
+if printf '%s\n' "$ENTRIES2" | grep -q -- "^${SLUG2}/lib/l2d-updater/bin/"; then
+	fail "distignore に bin 行が無くても lib/l2d-updater/bin/ は除外されるべき"
+else
+	pass "distignore に bin 行が無くても lib/l2d-updater/bin/ が除外される"
+fi
+
+if printf '%s\n' "$ENTRIES2" | grep -q -- "^${SLUG2}/lib/l2d-updater/loader.php$"; then
+	pass "同梱: ${SLUG2}/lib/l2d-updater/loader.php"
+else
+	fail "同梱されるべき ${SLUG2}/lib/l2d-updater/loader.php が無い"
+fi
 
 echo
 if [ "$FAILURES" -gt 0 ]; then

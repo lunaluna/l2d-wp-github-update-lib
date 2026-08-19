@@ -5,7 +5,7 @@
  * @package L2dWpGithubUpdateLib
  */
 
-require_once dirname( __DIR__, 2 ) . '/class-l2d-github-updater.php';
+require_once dirname( __DIR__, 2 ) . '/dist/class-l2d-github-updater.php';
 
 /**
  * L2dwpghul_GitHub_Updater のテスト用サブクラス. http_get() を固定レスポンスで

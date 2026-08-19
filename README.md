@@ -82,23 +82,49 @@ composer analyse   # phpstan
 composer test      # phpunit
 ```
 
+## タグ慣習
+
+このリポジトリのタグに **v 接頭辞は付けない**(素の semver。利用側プラグインと同じ慣習)。`v1.0.4` 以前は v 付きだった歴史的経緯があるが、既存タグは利用側プラグインが現に参照しているため削除しない。
+
+## 配布物(dist)
+
+`git subtree pull` はリポジトリ全体を取り込むため、配布対象を `dist/` に集約している。リリース時に `release.yml` の `publish-dist` job が `git subtree split --prefix=dist` で配布専用の履歴(`dist` ブランチ・`dist-X.Y.Z` タグ)を自動生成し、利用側プラグインはこの `dist-X.Y.Z` タグを subtree pull の参照先にする。ベンダーコピーは以下の4ファイルのみになり、`tests/` / `.github/` / `composer.*` / `README.md` / `CLAUDE.md` などの開発用ファイルは配布されない。
+
+```text
+lib/l2d-updater/
+├── loader.php
+├── class-l2d-github-updater.php
+├── LICENSE
+└── bin/build-zip.sh
+```
+
 ## リリース手順
 
 このリポジトリ自身にはタグ push で配布物を組み立てる release.yml が無い(`plugin-release.yml` は他リポジトリが `workflow_call` で使う側)。リリースは以下の手順を**必ず順番通りに**踏む。
 
-1. `loader.php` の `l2dwpghul_updater_register()` 第一引数(自己申告バージョン、例 `'1.0.3'`)を新しいバージョンに手動で書き換える。他の変更と混ぜず、専用コミットにする(過去の実績: `loader.phpの自己申告バージョンを1.0.3へ更新`)
-2. 横断検索して、他に現在バージョンを指す表記が残っていないか確認する(`grep -rn "<旧バージョン>" . --exclude-dir=vendor --exclude-dir=.git`)。ヒットが無いことを確認済み(コード内には他に現在バージョン表記は無い設計)
-3. PR を作成し、CI(PHP 構文チェック・PHPCS・PHPStan・PHPUnit)を通してから `main` にマージする
-4. タグを打って push する: `git tag vX.Y.Z && git push origin vX.Y.Z`
-5. **`release-version-check.yml` が成功することを確認する** — タグ push で自動起動し、`loader.php` の自己申告バージョンとタグが一致しないと `::error::` で失敗する。このリポジトリでタグを打つ際の**唯一の自動ゲート**なので、ここで失敗したら Release を作らず先に修正する
-6. `gh release create vX.Y.Z --title vX.Y.Z --notes "..."` で GitHub Release を手動作成する(ライブラリであり配布用 ZIP は不要なので、ビルド・アセット添付は行わない)
+1. `dist/loader.php` の `l2dwpghul_updater_register()` 第一引数(自己申告バージョン、例 `'1.0.3'`)を新しいバージョンに手動で書き換える。他の変更と混ぜず、専用コミットにする(過去の実績: `loader.phpの自己申告バージョンを1.0.3へ更新`)
+2. 横断検索して、他に現在バージョンを指す表記が残っていないか確認する(`grep -rn "<旧バージョン>" . --exclude-dir=vendor --exclude-dir=.git`)
+3. **`plugin-release.yml` の composite action 参照タグ(`verify-version` / `build-zip` / `release-notes`、いずれも `@X.Y.Z`)を新バージョンへ更新する。** reusable workflow 内の相対パス参照(`uses: ./.github/actions/...`)は呼び出し元リポジトリの `$GITHUB_WORKSPACE` を指すため使えず(実機・公式情報で確認済み)、タグ固定運用が必須。忘れやすい箇所なので毎回チェックする
+4. PR を作成し、CI(PHP 構文チェック・PHPCS・PHPStan・PHPUnit・build-zip スモークテスト)を通してから `main` にマージする
+5. タグを打って push する(**v 接頭辞なし**): `git tag X.Y.Z && git push origin X.Y.Z`
+6. **`release.yml` の両 job(`verify-loader-version` / `publish-dist`)が成功することを確認する** — タグ push で自動起動し、`dist/loader.php` の自己申告バージョンとタグが一致しないと `verify-loader-version` が `::error::` で失敗する。このリポジトリでタグを打つ際の**唯一の自動ゲート**なので、ここで失敗したら Release を作らず先に修正する。`publish-dist` はその後 `dist-X.Y.Z` タグを自動生成する
+7. `git ls-tree -r --name-only dist-X.Y.Z` が上記4ファイルのみを返すことを確認する
+8. `gh release create X.Y.Z --title X.Y.Z --notes "..."` で GitHub Release を手動作成する(ライブラリであり配布用 ZIP は不要なので、ビルド・アセット添付は行わない)
 
 ### 利用側プラグインへの反映
 
 このライブラリをリリースしただけでは、同梱している各プラグイン(FAUC など)には自動反映されない。追従する場合は、利用側プラグインのリポジトリで以下の2箇所を更新する:
 
-- `release.yml` の `uses: lunaluna/l2d-wp-github-update-lib/.github/workflows/plugin-release.yml@vX.Y.Z` の参照タグ
-- `git subtree pull --prefix=lib/l2d-updater https://github.com/lunaluna/l2d-wp-github-update-lib.git vX.Y.Z --squash` でベンダーコピー(`lib/l2d-updater/`)を更新
+- `release.yml` の `uses: lunaluna/l2d-wp-github-update-lib/.github/workflows/plugin-release.yml@X.Y.Z` の参照タグ
+- `git subtree pull --prefix=lib/l2d-updater https://github.com/lunaluna/l2d-wp-github-update-lib.git dist-X.Y.Z --squash` でベンダーコピー(`lib/l2d-updater/`)を更新
+
+**初回のみ**: 既存のベンダーコピーは `main` 系の履歴から取り込んだものなので、`dist` 系タグからの `git subtree pull` は無関係な履歴のマージとして競合する。初回だけ削除してから `subtree add` し直す(以後は通常の `subtree pull` で追従できる):
+
+```sh
+git rm -r lib/l2d-updater && git commit -m "..."
+git subtree add --prefix=lib/l2d-updater \
+  https://github.com/lunaluna/l2d-wp-github-update-lib.git dist-X.Y.Z --squash
+```
 
 ## ライセンス
 
