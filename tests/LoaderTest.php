@@ -33,13 +33,13 @@ class LoaderTest extends PHPUnit\Framework\TestCase {
 	 * ファイルパスで l2dwpghul_updater_register() が呼ばれること.
 	 */
 	public function test_returned_closure_registers_this_copy() {
-		$register = require dirname( __DIR__ ) . '/loader.php';
+		$register = require dirname( __DIR__ ) . '/dist/loader.php';
 		$register( array( 'slug' => 'plugin-a' ) );
 
 		global $l2dwpghul_updater_registry;
 
 		$this->assertSame(
-			array( dirname( __DIR__ ) . '/class-l2d-github-updater.php' ),
+			array( dirname( __DIR__ ) . '/dist/class-l2d-github-updater.php' ),
 			array_values( $l2dwpghul_updater_registry['files'] )
 		);
 		$this->assertSame( array( array( 'slug' => 'plugin-a' ) ), $l2dwpghul_updater_registry['configs'] );
@@ -50,7 +50,7 @@ class LoaderTest extends PHPUnit\Framework\TestCase {
 	 * require_once され、登録された設定の数だけインスタンス化されること.
 	 */
 	public function test_boot_uses_highest_version() {
-		require dirname( __DIR__ ) . '/loader.php';
+		require dirname( __DIR__ ) . '/dist/loader.php';
 
 		l2dwpghul_updater_register( '1.0.0', __DIR__ . '/fixtures/fake-class-v1.php', array( 'slug' => 'plugin-a' ) );
 		l2dwpghul_updater_register( '2.0.0', __DIR__ . '/fixtures/fake-class-v2.php', array( 'slug' => 'plugin-b' ) );
@@ -66,7 +66,7 @@ class LoaderTest extends PHPUnit\Framework\TestCase {
 	 * 候補が 1 つだけのとき、それがそのまま使われること.
 	 */
 	public function test_boot_with_single_candidate() {
-		require dirname( __DIR__ ) . '/loader.php';
+		require dirname( __DIR__ ) . '/dist/loader.php';
 
 		l2dwpghul_updater_register( '1.0.0', __DIR__ . '/fixtures/fake-class-v1.php', array( 'slug' => 'plugin-a' ) );
 
@@ -81,7 +81,7 @@ class LoaderTest extends PHPUnit\Framework\TestCase {
 	 * 何も require されないこと.
 	 */
 	public function test_boot_with_no_candidates_does_nothing() {
-		require dirname( __DIR__ ) . '/loader.php';
+		require dirname( __DIR__ ) . '/dist/loader.php';
 
 		l2dwpghul_updater_boot();
 
@@ -92,7 +92,7 @@ class LoaderTest extends PHPUnit\Framework\TestCase {
 	 * l2dwpghul_updater_register() は $config を検証も加工もせず素通しすること.
 	 */
 	public function test_register_passes_config_through_without_modification() {
-		require dirname( __DIR__ ) . '/loader.php';
+		require dirname( __DIR__ ) . '/dist/loader.php';
 
 		$config = array(
 			'slug'         => 'plugin-a',

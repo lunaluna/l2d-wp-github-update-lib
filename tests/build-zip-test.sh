@@ -22,7 +22,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILDER="${REPO_ROOT}/bin/build-zip.sh"
+BUILDER="${REPO_ROOT}/dist/bin/build-zip.sh"
 
 if [ ! -f "$BUILDER" ]; then
 	echo "Error: ${BUILDER} が見つかりません." >&2

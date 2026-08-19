@@ -5,6 +5,11 @@
  * 複数プラグインが異なるバージョンのこのライブラリを同梱していても、
  * 実行時に最も新しいバージョンのコピーだけが起動する.
  *
+ * このファイルが lib/ 配下にある場合はベンダーコピーである。直接編集せず、
+ * 上流 https://github.com/lunaluna/l2d-wp-github-update-lib を更新して
+ * git subtree pull で取り込むこと。このライブラリのリリース手順は上流にあり、
+ * 同梱先プラグインには適用されない。
+ *
  * 契約(初版で凍結。後から変更しない):
  * 1. l2dwpghul_updater_register( $version, $class_file, array $config ) の引数を増やさない.
  *    拡張は $config のキー追加で行う.
