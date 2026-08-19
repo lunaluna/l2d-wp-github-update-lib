@@ -24,9 +24,14 @@
 
 	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
 		<properties>
+			<!--
+			WPCS 3.2.0 以降、prefixes の各要素は 4 文字未満だとエラーになる
+			(MIN_PREFIX_LENGTH)。実際の識別子命名(l2d_updater_*, L2d_GitHub_Updater)は
+			変えず、ここでは末尾にアンダースコアを含めて 4 文字にしている.
+			-->
 			<property name="prefixes" type="array">
-				<element value="l2d"/>
-				<element value="L2D"/>
+				<element value="l2d_"/>
+				<element value="L2d_"/>
 			</property>
 		</properties>
 	</rule>
