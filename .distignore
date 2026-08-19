@@ -16,3 +16,4 @@ phpunit.xml.dist
 phpcs.xml.dist
 phpstan.neon.dist
 .phpunit.result.cache
+*.zip

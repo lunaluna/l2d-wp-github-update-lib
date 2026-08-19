@@ -85,3 +85,16 @@ jobs:
 
       - name: Run PHPUnit
         run: vendor/bin/phpunit
+
+  build-zip:
+    name: build-zip.sh smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ダミーの利用側プラグインを組み立ててビルドを 2 回実行し、生成物の名前・
+      # ZIP 内ルート・除外の効き方と、生成物が入れ子で同梱されないことを検証する。
+      # bin/build-zip.sh は PHP のテストからは一切カバーされないため、この
+      # ジョブがシェルスクリプト側の唯一の自動ゲートになる。
+      - name: Run build-zip smoke test
+        run: bash tests/build-zip-test.sh
