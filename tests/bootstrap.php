@@ -107,6 +107,17 @@ function wp_json_encode( $data ) {
 }
 
 /**
+ * wp_tempnam() のスタブ. 実ファイルは作らず、識別可能なダミーパスを返す.
+ *
+ * @param string $filename 元になるファイル名.
+ * @param string $dir      ディレクトリ(未使用).
+ * @return string ダミーの一時ファイルパス.
+ */
+function wp_tempnam( $filename = '', $dir = '' ) {
+	return '/tmp/l2d-test-tempfile-' . md5( (string) $filename );
+}
+
+/**
  * plugin_basename() のスタブ. 「ディレクトリ名/ファイル名」形式を返す簡易実装.
  *
  * @param string $file プラグインのメインファイルパス.

@@ -34,12 +34,14 @@ $l2dwpghul_updater_register( array(
 | `cache_ttl` | | `21600` |
 | `backoff_ttl` | | `1800` |
 | `allow_prerelease` | | `false` |
-| `token` | | `''`(未実装. 指定しても効果なし) |
+| `token` | | `''` |
 | `asset_pattern` | | `$slug` 前方一致 + `.zip` 後方一致(callable も可) |
 
-`token` はプライベートリポジトリ用の GitHub API 認証(予定)のためのキーで、README には設定キーとして記載しているが現バージョンでは読み取らない。
-
 `allow_prerelease` を `true` にすると、`/releases/latest`(prerelease・draft をどちらも除外)ではなく `/releases` 一覧を取得し、`draft` でない先頭のリリース(prerelease を含む)を最新として扱う。`/releases` は公開日時降順で返るため、先頭から順に draft でないものを探す。
+
+`token` を設定すると、プライベートリポジトリからの更新に対応する。GitHub API リクエストに `Authorization: Bearer <token>` を付け、配布アセットの URL は `asset.browser_download_url` ではなく `asset.url`(Assets API のエンドポイント)を使う。これは `browser_download_url`(github.com の配布ドメイン)が `Authorization` ヘッダーを認識せず 404 になるためで、Assets API URL に `Accept: application/octet-stream` を付ける方式のみがプライベートリポジトリで機能することを実機で確認している。
+
+WordPress コアの `download_url()` にはヘッダーを渡す手段が無いため、`upgrader_pre_download` フィルタでダウンロード処理自体を短絡し、`token` 付きで自前ダウンロードして一時ファイルパスを返す。`token` は `wp-config.php` の定数から渡すこと(DB に既定で保存する設計にはしていない)。
 
 `basename` / `version` / `requires` / `requires_php` / `tested` / `name` / `author` は `plugin_file` から `plugin_basename()` と `get_file_data()` で導出される。
 

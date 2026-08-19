@@ -815,4 +815,169 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 
 		$this->assertSame( $transient, $result );
 	}
+
+	// -------------------------------------------------------------------------
+	// トークン認証(新機能 4c)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * token を設定すると、GitHub API リクエストに Authorization ヘッダーが
+	 * 付くこと.
+	 */
+	public function test_token_adds_authorization_header_to_api_request() {
+		$updater = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = $this->ok_response( $this->release_body() );
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$updater->check_for_update( $transient );
+
+		$this->assertSame(
+			'Bearer secret-token',
+			$updater->requested_calls[0]['args']['headers']['Authorization']
+		);
+	}
+
+	/**
+	 * token が空のとき、Authorization ヘッダーを付けないこと.
+	 */
+	public function test_no_token_omits_authorization_header() {
+		$updater = $this->make_updater();
+		$updater->stub_response = $this->ok_response( $this->release_body() );
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$updater->check_for_update( $transient );
+
+		$this->assertArrayNotHasKey( 'Authorization', $updater->requested_calls[0]['args']['headers'] );
+	}
+
+	/**
+	 * token を設定すると、package(zip_url)が asset.browser_download_url
+	 * ではなく asset.url(Assets API URL)になること(Step A8 で実機確認済み
+	 * の、プライベートリポジトリでのアセット取得方法).
+	 */
+	public function test_token_uses_asset_api_url_for_package() {
+		$updater = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = $this->ok_response(
+			$this->release_body(
+				array(
+					'assets' => array(
+						array(
+							'name'                 => 'fake-plugin.1.2.0.zip',
+							'browser_download_url' => 'https://github.com/lunaluna/fake-plugin/releases/download/v1.2.0/fake-plugin.1.2.0.zip',
+							'url'                  => 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+						),
+					),
+				)
+			)
+		);
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$result    = $updater->check_for_update( $transient );
+
+		$this->assertSame(
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+			$result->response['fake-plugin/fake-plugin.php']->package
+		);
+	}
+
+	/**
+	 * pre_download_package(): $reply が既に false 以外(他のフィルタが
+	 * 短絡済み)のとき、そのまま返すこと.
+	 */
+	public function test_pre_download_package_passes_through_existing_reply() {
+		$updater = $this->make_updater( array( 'token' => 'secret-token' ) );
+
+		$result = $updater->pre_download_package(
+			'/already/downloaded.zip',
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertSame( '/already/downloaded.zip', $result );
+	}
+
+	/**
+	 * pre_download_package(): token が空のとき、false を返し(コアの既定
+	 * 処理に任せる)、独自ダウンロードを行わないこと.
+	 */
+	public function test_pre_download_package_returns_false_when_no_token() {
+		$updater = $this->make_updater();
+
+		$result = $updater->pre_download_package(
+			false,
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertFalse( $result );
+		$this->assertSame( array(), $updater->requested_calls );
+	}
+
+	/**
+	 * pre_download_package(): hook_extra['plugin'] が自分の basename と
+	 * 異なるとき、false を返すこと(他プラグインの更新を壊さない).
+	 */
+	public function test_pre_download_package_ignores_other_plugins() {
+		$updater = $this->make_updater( array( 'token' => 'secret-token' ) );
+
+		$result = $updater->pre_download_package(
+			false,
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'other-plugin/other-plugin.php' )
+		);
+
+		$this->assertFalse( $result );
+		$this->assertSame( array(), $updater->requested_calls );
+	}
+
+	/**
+	 * pre_download_package(): token 設定時、対象プラグインの更新であれば
+	 * Authorization / Accept ヘッダー付きでダウンロードし、一時ファイル
+	 * パスを返すこと.
+	 */
+	public function test_pre_download_package_downloads_with_auth_headers() {
+		$updater = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => 'zip-bytes',
+		);
+
+		$package = 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999';
+		$result  = $updater->pre_download_package(
+			false,
+			$package,
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertIsString( $result );
+		$this->assertCount( 1, $updater->requested_calls );
+		$this->assertSame( $package, $updater->requested_calls[0]['url'] );
+		$this->assertSame( 'Bearer secret-token', $updater->requested_calls[0]['args']['headers']['Authorization'] );
+		$this->assertSame( 'application/octet-stream', $updater->requested_calls[0]['args']['headers']['Accept'] );
+	}
+
+	/**
+	 * pre_download_package(): ダウンロードが非 200 のとき、WP_Error を
+	 * 返すこと.
+	 */
+	public function test_pre_download_package_returns_wp_error_on_non_200() {
+		$updater = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 404 ),
+			'body'     => '',
+		);
+
+		$result = $updater->pre_download_package(
+			false,
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+	}
 }

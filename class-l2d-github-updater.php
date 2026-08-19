@@ -114,14 +114,20 @@ class L2dwpghul_GitHub_Updater {
 	private $allow_prerelease;
 
 	/**
+	 * プライベートリポジトリ用の GitHub API 認証トークン. 空文字なら
+	 * 未認証(公開リポジトリ)として扱う.
+	 *
+	 * @var string
+	 */
+	private $token;
+
+	/**
 	 * 設定を受け取り、フックを登録する.
 	 *
 	 * 必須キーは plugin_file(プラグインのメインファイルの絶対パス)と
 	 * github_repo(更新元の GitHub リポジトリ owner/repo)の 2 つ。任意キーは
 	 * slug / name / author / cache_key / filter_prefix / cache_ttl /
-	 * backoff_ttl / asset_pattern / allow_prerelease。token は README に
-	 * 設定キーとして記載しているが、認証トークン付与は未実装のため現
-	 * バージョンでは読み取らない.
+	 * backoff_ttl / asset_pattern / allow_prerelease / token.
 	 *
 	 * @param array $config 設定の連想配列.
 	 */
@@ -142,6 +148,7 @@ class L2dwpghul_GitHub_Updater {
 		$this->name_override    = ! empty( $config['name'] ) ? $config['name'] : null;
 		$this->author_override  = ! empty( $config['author'] ) ? $config['author'] : null;
 		$this->allow_prerelease = ! empty( $config['allow_prerelease'] );
+		$this->token            = ! empty( $config['token'] ) ? $config['token'] : '';
 
 		$this->init();
 	}
@@ -156,6 +163,7 @@ class L2dwpghul_GitHub_Updater {
 		add_filter( 'plugins_api', array( $this, 'plugin_info' ), 10, 3 );
 		add_action( 'upgrader_process_complete', array( $this, 'after_update' ), 10, 2 );
 		add_filter( 'upgrader_source_selection', array( $this, 'rename_source_directory' ), 10, 4 );
+		add_filter( 'upgrader_pre_download', array( $this, 'pre_download_package' ), 10, 4 );
 	}
 
 	/**
@@ -296,6 +304,74 @@ class L2dwpghul_GitHub_Updater {
 	}
 
 	/**
+	 * プライベートリポジトリのパッケージを認証ヘッダー付きでダウンロードする.
+	 *
+	 * WordPress コアの download_url()(内部の wp_safe_remote_get())には
+	 * 認証ヘッダーを渡す手段が無いため、upgrader_pre_download で false 以外
+	 * を返してダウンロード処理自体をショートサーキットし、自前で
+	 * Authorization ヘッダー付きの取得を行う。$package には GitHub Releases
+	 * の Assets API URL(https://api.github.com/repos/{owner}/{repo}/releases/assets/{id})
+	 * が入っている前提(extract_zip_url() が token 設定時にこの形式を選ぶ)。
+	 * これは Step A8 でプライベートテストリポジトリを使い実機確認した設計:
+	 * - browser_download_url に Authorization ヘッダーを付けても 404 になる
+	 *   (github.com の配布ドメインは Bearer トークンを認識しない)
+	 * - Assets API URL に Accept: application/octet-stream を付けると
+	 *   ファイル本体が取得できる
+	 *
+	 * @param false|string|WP_Error $reply      既定の戻り値(通常 false).
+	 * @param string                $package    パッケージ URI.
+	 * @param WP_Upgrader           $upgrader   Upgrader インスタンス(未使用).
+	 * @param array                 $hook_extra hook_extra 配列.
+	 * @return false|string|WP_Error ダウンロード済み一時ファイルのパス、
+	 *         対象外なら false、失敗時は WP_Error.
+	 */
+	public function pre_download_package( $reply, $package, $upgrader, $hook_extra ) {
+		if ( false !== $reply ) {
+			return $reply;
+		}
+
+		if ( '' === $this->token ) {
+			return false;
+		}
+
+		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->get_basename() ) {
+			return false;
+		}
+
+		$tmpfname = wp_tempnam( $this->slug );
+
+		if ( ! $tmpfname ) {
+			return new WP_Error( 'l2dwpghul_no_tempfile', '一時ファイルを作成できませんでした.' );
+		}
+
+		$response = $this->http_get(
+			$package,
+			array(
+				'timeout'  => 300,
+				'stream'   => true,
+				'filename' => $tmpfname,
+				'headers'  => array(
+					'Authorization' => 'Bearer ' . $this->token,
+					'Accept'        => 'application/octet-stream',
+				),
+			)
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		if ( 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+			return new WP_Error(
+				'l2dwpghul_download_failed',
+				sprintf( 'パッケージのダウンロードに失敗しました(HTTP %d).', wp_remote_retrieve_response_code( $response ) )
+			);
+		}
+
+		return $tmpfname;
+	}
+
+	/**
 	 * GitHub の最新リリース情報を取得する（サイトトランジェントでキャッシュ）.
 	 *
 	 * キャッシュの値が空配列(array())ならバックオフ中とみなし、`version` が
@@ -342,14 +418,20 @@ class L2dwpghul_GitHub_Updater {
 			? sprintf( 'https://api.github.com/repos/%s/releases', $this->github_repo )
 			: sprintf( 'https://api.github.com/repos/%s/releases/latest', $this->github_repo );
 
+		$headers = array(
+			'Accept'     => 'application/vnd.github+json',
+			'User-Agent' => 'l2d-wp-github-update-lib/' . $this->slug,
+		);
+
+		if ( '' !== $this->token ) {
+			$headers['Authorization'] = 'Bearer ' . $this->token;
+		}
+
 		$response = $this->http_get(
 			$url,
 			array(
 				'timeout' => 10,
-				'headers' => array(
-					'Accept'     => 'application/vnd.github+json',
-					'User-Agent' => 'l2d-wp-github-update-lib/' . $this->slug,
-				),
+				'headers' => $headers,
 			)
 		);
 
@@ -371,7 +453,7 @@ class L2dwpghul_GitHub_Updater {
 			return null;
 		}
 
-		$zip_url = self::extract_zip_url( $release_data, $this->asset_pattern );
+		$zip_url = self::extract_zip_url( $release_data, $this->asset_pattern, '' !== $this->token );
 		if ( ! $zip_url ) {
 			return null;
 		}
@@ -439,14 +521,25 @@ class L2dwpghul_GitHub_Updater {
 	 * GitHub 自動生成の zipball はディレクトリ名がプラグインスラッグと一致せず
 	 * プラグインディレクトリを壊すため、フォールバックはしない（見つからなければ null）.
 	 *
-	 * @param array           $body    GitHub API のレスポンスボディ（デコード済み連想配列）.
-	 * @param string|callable $pattern 文字列なら前方一致文字列として扱い、
-	 *                                 callable なら $name を渡した戻り値の真偽で判定する.
+	 * $use_api_url が true のときは asset.url(Assets API のエンドポイント
+	 * URL)を返す。プライベートリポジトリの asset.browser_download_url は
+	 * Authorization ヘッダーを付けても取得できず(github.com の配布ドメインは
+	 * Bearer トークンを認識しない)、Assets API + Accept: application/octet-stream
+	 * が必要なことを Step A8 で実機確認した.
+	 *
+	 * @param array           $body        GitHub API のレスポンスボディ（デコード済み連想配列）.
+	 * @param string|callable $pattern     文字列なら前方一致文字列として扱い、
+	 *                                     callable なら $name を渡した戻り値の真偽で判定する.
+	 * @param bool            $use_api_url true なら asset.url を、false なら
+	 *                                     asset.browser_download_url を返す.
 	 * @return string|null 見つかった ZIP の URL。見つからなければ null.
 	 */
-	public static function extract_zip_url( $body, $pattern ) {
+	public static function extract_zip_url( $body, $pattern, $use_api_url = false ) {
 		foreach ( (array) ( isset( $body['assets'] ) ? $body['assets'] : array() ) as $asset ) {
-			if ( empty( $asset['browser_download_url'] ) ) {
+			$url_field    = $use_api_url ? 'url' : 'browser_download_url';
+			$download_url = isset( $asset[ $url_field ] ) ? $asset[ $url_field ] : '';
+
+			if ( empty( $download_url ) ) {
 				continue;
 			}
 
@@ -457,7 +550,7 @@ class L2dwpghul_GitHub_Updater {
 				: ( 0 === strpos( $name, (string) $pattern ) && '.zip' === substr( $name, -4 ) );
 
 			if ( $matches ) {
-				return $asset['browser_download_url'];
+				return $download_url;
 			}
 		}
 

@@ -28,12 +28,23 @@ class TestableGitHubUpdater extends L2dwpghul_GitHub_Updater {
 	public $requested_urls = array();
 
 	/**
+	 * http_get() に渡された url/args の組の記録.
+	 *
+	 * @var array[]
+	 */
+	public $requested_calls = array();
+
+	/**
 	 * @param string $url  URL.
-	 * @param array  $args リクエスト引数(未使用).
+	 * @param array  $args リクエスト引数.
 	 * @return array|WP_Error
 	 */
 	protected function http_get( $url, $args ) {
-		$this->requested_urls[] = $url;
+		$this->requested_urls[]  = $url;
+		$this->requested_calls[] = array(
+			'url'  => $url,
+			'args' => $args,
+		);
 		return $this->stub_response;
 	}
 }
