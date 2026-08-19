@@ -33,9 +33,11 @@ $l2dwpghul_updater_register( array(
 | `filter_prefix` | | なし(ライブラリ共通フィルタのみ) |
 | `cache_ttl` | | `21600` |
 | `backoff_ttl` | | `1800` |
-| `allow_prerelease` | | `false` |
-| `token` | | `''` |
-| `asset_pattern` | | `$slug` 前方一致 + `.zip` 後方一致 |
+| `allow_prerelease` | | `false`(未実装. 指定しても効果なし) |
+| `token` | | `''`(未実装. 指定しても効果なし) |
+| `asset_pattern` | | `$slug` 前方一致 + `.zip` 後方一致(callable も可) |
+
+`allow_prerelease` は prerelease チャンネル対応(予定)、`token` はプライベートリポジトリ用の GitHub API 認証(予定)のためのキーで、README には設定キーとして記載しているが現バージョンでは読み取らない。
 
 `basename` / `version` / `requires` / `requires_php` / `tested` / `name` / `author` は `plugin_file` から `plugin_basename()` と `get_file_data()` で導出される。
 

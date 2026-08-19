@@ -7,6 +7,14 @@
 
 /**
  * バージョン交渉ローダーのテスト.
+ *
+ * フィクスチャ(fake-class-v1.php / fake-class-v2.php)は本物のクラスと同名の
+ * L2dwpghul_GitHub_Updater を class_exists ガードで定義する。GitHubUpdaterTest
+ * が同一プロセスで先に本物のクラスを読み込むとフィクスチャ側の定義がスキップ
+ * され、テストが汚染されるため、このクラスは別プロセスで実行する.
+ *
+ * @runTestsInSeparateProcesses
+ * @preserveGlobalState disabled
  */
 class LoaderTest extends PHPUnit\Framework\TestCase {
 
