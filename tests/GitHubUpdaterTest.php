@@ -6,6 +6,7 @@
  */
 
 require_once __DIR__ . '/fixtures/class-testable-github-updater.php';
+require_once __DIR__ . '/stubs/class-fake-wp-filesystem.php';
 
 /**
  * GitHubUpdaterTest クラス.
@@ -26,6 +27,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		parent::setUp();
 		$GLOBALS['l2d_test_filters']          = array();
 		$GLOBALS['l2d_test_site_transients']  = array();
+		$GLOBALS['wp_filesystem']              = new FakeWpFilesystem();
 		$this->plugin_file = __DIR__ . '/fixtures/fake-plugin/fake-plugin.php';
 	}
 
@@ -636,5 +638,107 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 
 		$this->assertSame( 1, $calls );
 		$this->assertSame( array(), $GLOBALS['l2d_test_site_transients']['l2dwpghul_updater_' . md5( 'lunaluna/fake-plugin' )] );
+	}
+
+	// -------------------------------------------------------------------------
+	// rename_source_directory() (新機能 4a)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * このプラグインの更新で、ZIP 内ルートディレクトリ名がスラッグと異なる
+	 * とき、正しいスラッグ名にリネームすること.
+	 */
+	public function test_rename_source_directory_renames_when_plugin_matches_and_name_differs() {
+		$updater = $this->make_updater();
+
+		$result = $updater->rename_source_directory(
+			'/tmp/wp-upgrade/wrong-dir-name/',
+			'/tmp/wp-upgrade/wrong-dir-name/',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertSame( '/tmp/wp-upgrade/fake-plugin/', $result );
+		$this->assertSame(
+			array(
+				array(
+					'source'      => '/tmp/wp-upgrade/wrong-dir-name/',
+					'destination' => '/tmp/wp-upgrade/fake-plugin/',
+					'overwrite'   => true,
+				),
+			),
+			$GLOBALS['wp_filesystem']->moved_calls
+		);
+	}
+
+	/**
+	 * hook_extra['plugin'] が自分の basename と異なるとき、何もせず
+	 * $source をそのまま返すこと(他プラグインの更新を壊さない).
+	 */
+	public function test_rename_source_directory_ignores_other_plugins() {
+		$updater = $this->make_updater();
+
+		$result = $updater->rename_source_directory(
+			'/tmp/wp-upgrade/wrong-dir-name/',
+			'/tmp/wp-upgrade/wrong-dir-name/',
+			new stdClass(),
+			array( 'plugin' => 'other-plugin/other-plugin.php' )
+		);
+
+		$this->assertSame( '/tmp/wp-upgrade/wrong-dir-name/', $result );
+		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moved_calls );
+	}
+
+	/**
+	 * ディレクトリ名が既にスラッグと一致するとき、move() を呼ばずそのまま
+	 * 返すこと.
+	 */
+	public function test_rename_source_directory_skips_when_name_already_matches() {
+		$updater = $this->make_updater();
+
+		$result = $updater->rename_source_directory(
+			'/tmp/wp-upgrade/fake-plugin/',
+			'/tmp/wp-upgrade/fake-plugin/',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertSame( '/tmp/wp-upgrade/fake-plugin/', $result );
+		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moved_calls );
+	}
+
+	/**
+	 * $source が WP_Error のとき、そのまま返すこと(素通し).
+	 */
+	public function test_rename_source_directory_passes_through_wp_error() {
+		$updater = $this->make_updater();
+		$error   = new WP_Error();
+
+		$result = $updater->rename_source_directory(
+			$error,
+			'/tmp/wp-upgrade/wrong-dir-name/',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertSame( $error, $result );
+		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moved_calls );
+	}
+
+	/**
+	 * move() が失敗したとき、WP_Error を返すこと.
+	 */
+	public function test_rename_source_directory_returns_wp_error_on_move_failure() {
+		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->move_should_fail = true;
+
+		$result = $updater->rename_source_directory(
+			'/tmp/wp-upgrade/wrong-dir-name/',
+			'/tmp/wp-upgrade/wrong-dir-name/',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertInstanceOf( 'WP_Error', $result );
 	}
 }

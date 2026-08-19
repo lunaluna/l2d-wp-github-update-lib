@@ -146,6 +146,7 @@ class L2dwpghul_GitHub_Updater {
 		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'check_for_update' ) );
 		add_filter( 'plugins_api', array( $this, 'plugin_info' ), 10, 3 );
 		add_action( 'upgrader_process_complete', array( $this, 'after_update' ), 10, 2 );
+		add_filter( 'upgrader_source_selection', array( $this, 'rename_source_directory' ), 10, 4 );
 	}
 
 	/**
@@ -241,6 +242,48 @@ class L2dwpghul_GitHub_Updater {
 
 		delete_site_transient( $this->cache_key );
 		delete_site_transient( 'update_plugins' );
+	}
+
+	/**
+	 * ZIP 内のルートディレクトリ名がスラッグと異なる場合にリネームする.
+	 *
+	 * 通常は build-zip.sh の規約(zip 内ルートディレクトリ名 = スラッグ)により
+	 * 発生しないが、他人が作った zip 命名にも耐えるための多層防御として追加する。
+	 * extract_zip_url() の fail closed(スラッグ前方一致必須)が第一の防壁で、
+	 * これは第二の防壁。$hook_extra['plugin'] が自分の basename のときだけ
+	 * 働かせ、他プラグインの更新を壊さないようにする.
+	 *
+	 * @param string|WP_Error $source        リネーム前のソースディレクトリパス.
+	 * @param string          $remote_source  展開直後のリモートソースパス(未使用).
+	 * @param WP_Upgrader     $upgrader       Upgrader インスタンス(未使用).
+	 * @param array           $hook_extra     hook_extra 配列.
+	 * @return string|WP_Error リネーム後のパス、対象外ならそのまま $source.
+	 */
+	public function rename_source_directory( $source, $remote_source, $upgrader, $hook_extra ) {
+		if ( is_wp_error( $source ) ) {
+			return $source;
+		}
+
+		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->get_basename() ) {
+			return $source;
+		}
+
+		$desired_source = trailingslashit( dirname( untrailingslashit( $source ) ) ) . $this->slug . '/';
+
+		if ( $source === $desired_source ) {
+			return $source;
+		}
+
+		global $wp_filesystem;
+
+		if ( ! $wp_filesystem->move( $source, $desired_source, true ) ) {
+			return new WP_Error(
+				'l2dwpghul_rename_failed',
+				sprintf( 'ディレクトリ名を %s に変更できませんでした.', $this->slug )
+			);
+		}
+
+		return $desired_source;
 	}
 
 	/**

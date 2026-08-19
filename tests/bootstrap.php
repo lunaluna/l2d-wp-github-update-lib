@@ -77,6 +77,26 @@ function get_file_data( $file, $default_headers ) {
 }
 
 /**
+ * trailingslashit() のスタブ.
+ *
+ * @param string $string 対象の文字列.
+ * @return string 末尾に / を1つだけ付けた文字列.
+ */
+function trailingslashit( $string ) {
+	return rtrim( (string) $string, '/\\' ) . '/';
+}
+
+/**
+ * untrailingslashit() のスタブ.
+ *
+ * @param string $string 対象の文字列.
+ * @return string 末尾の / を取り除いた文字列.
+ */
+function untrailingslashit( $string ) {
+	return rtrim( (string) $string, '/\\' );
+}
+
+/**
  * wp_json_encode() のスタブ.
  *
  * @param mixed $data エンコードするデータ.
