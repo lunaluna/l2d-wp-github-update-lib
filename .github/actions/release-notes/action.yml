@@ -1,0 +1,56 @@
+name: 'Release notes'
+description: 'readme.txt(= x.y.z = 節)または CHANGELOG.md からリリースノートを抽出する.'
+inputs:
+  source:
+    description: '抽出元ファイル(readme.txt または CHANGELOG.md).'
+    required: true
+  version:
+    description: 'バージョン番号(v なし).'
+    required: true
+outputs:
+  notes_file:
+    description: '抽出したリリースノートを書き出したファイルのパス.'
+    value: ${{ steps.extract.outputs.notes_file }}
+runs:
+  using: 'composite'
+  steps:
+    - id: extract
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.source }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "$SOURCE" ]; then
+          echo "::error::$SOURCE が見つかりません"
+          exit 1
+        fi
+
+        NOTES_FILE="release-notes.txt"
+
+        if [[ "$SOURCE" == *.md ]]; then
+          # Keep a Changelog スタイルの "## [x.y.z]" / "## x.y.z" 見出しから
+          # 次の見出しまでを抽出する.
+          awk -v ver="$VERSION" '
+            { sub(/\r$/, "") }
+            $0 ~ "^## *\\[?" ver "\\]?" { capture = 1; next }
+            capture && /^## / { exit }
+            capture { print }
+          ' "$SOURCE" > "$NOTES_FILE"
+        else
+          # readme.txt は CRLF 改行のことがあるため、完全一致比較の前に
+          # 行末の \r を取り除く.
+          awk -v ver="$VERSION" '
+            { sub(/\r$/, "") }
+            $0 == "= " ver " =" { capture = 1; next }
+            capture && /^= [0-9]/ { exit }
+            capture { print }
+          ' "$SOURCE" > "$NOTES_FILE"
+        fi
+
+        if [ ! -s "$NOTES_FILE" ]; then
+          echo "Release ${VERSION}." > "$NOTES_FILE"
+        fi
+
+        echo "notes_file=${NOTES_FILE}" >> "$GITHUB_OUTPUT"

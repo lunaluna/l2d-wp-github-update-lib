@@ -1,0 +1,80 @@
+name: Plugin release
+
+# 単純な構成の利用側プラグイン(FAUC / get-patterns-by-pattern-name /
+# flamingo-csv-sjis-exporter)が workflow_call で呼ぶ reusable workflow。
+# WPMAR のような複雑な release.yml(フォント生成・vendor-pdf.zip 同梱等)
+# を持つリポジトリは、これを使わず composite actions のみを個別に使う。
+#
+# 呼び出し元は push(タグ)または workflow_dispatch(inputs.tag)で
+# トリガーする想定。github コンテキストは caller のものになるため、
+# github.event_name / github.event.inputs.tag は caller 側の値を参照する
+# (Step A0 で実機確認済み).
+
+on:
+  workflow_call:
+    inputs:
+      slug:
+        description: 'プラグインスラッグ(プラグインディレクトリ名・メインファイル名の元).'
+        required: true
+        type: string
+      version_files:
+        description: 'verify-version action に渡す "path:pattern" の複数行.'
+        required: true
+        type: string
+      notes_source:
+        description: 'release-notes action に渡す抽出元ファイル(readme.txt など).'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag and version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+
+          if [ -z "$TAG" ]; then
+            echo "::error::タグを解決できませんでした(workflow_dispatch では tag 入力が必須です)"
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify version consistency
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/verify-version@v1
+        with:
+          version: ${{ steps.resolve.outputs.version }}
+          files: ${{ inputs.version_files }}
+
+      - name: Build distribution ZIP
+        id: build
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/build-zip@v1
+
+      - name: Extract release notes
+        id: notes
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/release-notes@v1
+        with:
+          source: ${{ inputs.notes_source }}
+          version: ${{ steps.resolve.outputs.version }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.resolve.outputs.tag }}" "${{ steps.build.outputs.zip_name }}" \
+            --title "${{ steps.resolve.outputs.tag }}" \
+            --notes-file "${{ steps.notes.outputs.notes_file }}"

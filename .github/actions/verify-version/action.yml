@@ -1,0 +1,63 @@
+name: 'Verify version'
+description: >-
+  タグから解決したバージョンと、複数ファイル中のバージョン表記が
+  すべて一致することを確認する。1 箇所でも不一致なら失敗する.
+inputs:
+  version:
+    description: '正とするバージョン番号(v なし. 例 1.9.0).'
+    required: true
+  files:
+    description: >-
+      "path:pattern" 形式の複数行。各行について、path 内で pattern に
+      マッチした行から値を抽出し、version と一致するか確認する。
+      値の抽出は、マッチ行にシングルクォート区切りの値があればそれを
+      (例 define('FAUC_VERSION', '1.9.0'))、なければ pattern 直後の
+      コロン以降(空白除去)を使う(例 "Version: 1.9.0"、"Stable tag: 1.9.0").
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        FILES: ${{ inputs.files }}
+      run: |
+        set -euo pipefail
+
+        FAILED=0
+
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+
+          FILE="${line%%:*}"
+          PATTERN="${line#*:}"
+
+          if [ ! -f "$FILE" ]; then
+            echo "::error::$FILE が見つかりません"
+            FAILED=1
+            continue
+          fi
+
+          MATCHED_LINE=$(grep -E "$PATTERN" "$FILE" | head -n1 | tr -d '\r' || true)
+
+          if [ -z "$MATCHED_LINE" ]; then
+            echo "::error::$FILE 内に \"$PATTERN\" に一致する行が見つかりません"
+            FAILED=1
+            continue
+          fi
+
+          if echo "$MATCHED_LINE" | grep -qE "'[^']+'"; then
+            FOUND=$(echo "$MATCHED_LINE" | sed -E "s/.*'([^']+)'.*/\1/")
+          else
+            FOUND=$(echo "$MATCHED_LINE" | sed -E "s/^.*${PATTERN}[[:space:]]*//")
+          fi
+
+          if [ "$FOUND" != "$VERSION" ]; then
+            echo "::error::$FILE の \"$PATTERN\" ($FOUND) がバージョン ($VERSION) と一致しません"
+            FAILED=1
+          fi
+        done <<< "$FILES"
+
+        if [ "$FAILED" -ne 0 ]; then
+          exit 1
+        fi

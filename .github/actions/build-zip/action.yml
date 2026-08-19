@@ -1,0 +1,26 @@
+name: 'Build zip'
+description: '呼び出し元リポジトリの bin/build-zip.sh を実行し、配布用 ZIP を生成する.'
+outputs:
+  zip_name:
+    description: '生成された ZIP のファイル名(プラグインルートに作られる).'
+    value: ${{ steps.build.outputs.zip_name }}
+runs:
+  using: 'composite'
+  steps:
+    - id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "bin/build-zip.sh" ]; then
+          echo "::error::bin/build-zip.sh が見つかりません"
+          exit 1
+        fi
+
+        bash bin/build-zip.sh
+
+        SLUG="$(basename "$(pwd)")"
+        VERSION=$(grep -E '^[[:space:]]*\*[[:space:]]*Version:' "${SLUG}.php" \
+          | head -n1 | sed -E 's/.*Version:[[:space:]]*//' | tr -d '\r')
+
+        echo "zip_name=${SLUG}.${VERSION}.zip" >> "$GITHUB_OUTPUT"
