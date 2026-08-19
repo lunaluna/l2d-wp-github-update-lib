@@ -55,18 +55,18 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Verify version consistency
-        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/verify-version@v1.0.0
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/verify-version@1.1.0
         with:
           version: ${{ steps.resolve.outputs.version }}
           files: ${{ inputs.version_files }}
 
       - name: Build distribution ZIP
         id: build
-        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/build-zip@v1.0.0
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/build-zip@1.1.0
 
       - name: Extract release notes
         id: notes
-        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/release-notes@v1.0.0
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/release-notes@1.1.0
         with:
           source: ${{ inputs.notes_source }}
           version: ${{ steps.resolve.outputs.version }}
