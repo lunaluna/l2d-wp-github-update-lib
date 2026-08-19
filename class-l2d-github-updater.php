@@ -106,14 +106,22 @@ class L2dwpghul_GitHub_Updater {
 	private $headers;
 
 	/**
+	 * Prerelease チャンネル(/releases 一覧から draft を除いた最新)を
+	 * 使うかどうか。既定は false で /releases/latest を使う.
+	 *
+	 * @var bool
+	 */
+	private $allow_prerelease;
+
+	/**
 	 * 設定を受け取り、フックを登録する.
 	 *
 	 * 必須キーは plugin_file(プラグインのメインファイルの絶対パス)と
 	 * github_repo(更新元の GitHub リポジトリ owner/repo)の 2 つ。任意キーは
 	 * slug / name / author / cache_key / filter_prefix / cache_ttl /
-	 * backoff_ttl / asset_pattern。allow_prerelease と token は README に
-	 * 設定キーとして記載しているが、prerelease 対応・認証トークン付与は
-	 * 未実装のため現バージョンでは読み取らない.
+	 * backoff_ttl / asset_pattern / allow_prerelease。token は README に
+	 * 設定キーとして記載しているが、認証トークン付与は未実装のため現
+	 * バージョンでは読み取らない.
 	 *
 	 * @param array $config 設定の連想配列.
 	 */
@@ -123,16 +131,17 @@ class L2dwpghul_GitHub_Updater {
 			return;
 		}
 
-		$this->plugin_file     = $config['plugin_file'];
-		$this->github_repo     = $config['github_repo'];
-		$this->slug            = ! empty( $config['slug'] ) ? $config['slug'] : dirname( plugin_basename( $this->plugin_file ) );
-		$this->cache_key       = ! empty( $config['cache_key'] ) ? $config['cache_key'] : ( 'l2dwpghul_updater_' . md5( $this->github_repo ) );
-		$this->filter_prefix   = ! empty( $config['filter_prefix'] ) ? $config['filter_prefix'] : '';
-		$this->cache_ttl       = isset( $config['cache_ttl'] ) ? (int) $config['cache_ttl'] : 21600;
-		$this->backoff_ttl     = isset( $config['backoff_ttl'] ) ? (int) $config['backoff_ttl'] : 1800;
-		$this->asset_pattern   = ! empty( $config['asset_pattern'] ) ? $config['asset_pattern'] : $this->slug;
-		$this->name_override   = ! empty( $config['name'] ) ? $config['name'] : null;
-		$this->author_override = ! empty( $config['author'] ) ? $config['author'] : null;
+		$this->plugin_file      = $config['plugin_file'];
+		$this->github_repo      = $config['github_repo'];
+		$this->slug             = ! empty( $config['slug'] ) ? $config['slug'] : dirname( plugin_basename( $this->plugin_file ) );
+		$this->cache_key        = ! empty( $config['cache_key'] ) ? $config['cache_key'] : ( 'l2dwpghul_updater_' . md5( $this->github_repo ) );
+		$this->filter_prefix    = ! empty( $config['filter_prefix'] ) ? $config['filter_prefix'] : '';
+		$this->cache_ttl        = isset( $config['cache_ttl'] ) ? (int) $config['cache_ttl'] : 21600;
+		$this->backoff_ttl      = isset( $config['backoff_ttl'] ) ? (int) $config['backoff_ttl'] : 1800;
+		$this->asset_pattern    = ! empty( $config['asset_pattern'] ) ? $config['asset_pattern'] : $this->slug;
+		$this->name_override    = ! empty( $config['name'] ) ? $config['name'] : null;
+		$this->author_override  = ! empty( $config['author'] ) ? $config['author'] : null;
+		$this->allow_prerelease = ! empty( $config['allow_prerelease'] );
 
 		$this->init();
 	}
@@ -329,7 +338,9 @@ class L2dwpghul_GitHub_Updater {
 	 *         取得・解析に成功した場合のみ配列.
 	 */
 	private function request_latest_release() {
-		$url = sprintf( 'https://api.github.com/repos/%s/releases/latest', $this->github_repo );
+		$url = $this->allow_prerelease
+			? sprintf( 'https://api.github.com/repos/%s/releases', $this->github_repo )
+			: sprintf( 'https://api.github.com/repos/%s/releases/latest', $this->github_repo );
 
 		$response = $this->http_get(
 			$url,
@@ -351,21 +362,50 @@ class L2dwpghul_GitHub_Updater {
 		}
 
 		$body = json_decode( wp_remote_retrieve_body( $response ), true );
-		if ( ! is_array( $body ) || empty( $body['tag_name'] ) ) {
+
+		$release_data = $this->allow_prerelease
+			? $this->pick_first_non_draft_release( $body )
+			: $body;
+
+		if ( ! is_array( $release_data ) || empty( $release_data['tag_name'] ) ) {
 			return null;
 		}
 
-		$zip_url = self::extract_zip_url( $body, $this->asset_pattern );
+		$zip_url = self::extract_zip_url( $release_data, $this->asset_pattern );
 		if ( ! $zip_url ) {
 			return null;
 		}
 
 		return array(
-			'version'      => self::normalize_version( $body['tag_name'] ),
+			'version'      => self::normalize_version( $release_data['tag_name'] ),
 			'zip_url'      => $zip_url,
-			'notes'        => isset( $body['body'] ) ? (string) $body['body'] : '',
-			'published_at' => isset( $body['published_at'] ) ? (string) $body['published_at'] : '',
+			'notes'        => isset( $release_data['body'] ) ? (string) $release_data['body'] : '',
+			'published_at' => isset( $release_data['published_at'] ) ? (string) $release_data['published_at'] : '',
 		);
+	}
+
+	/**
+	 * /releases 一覧(GitHub API は公開日時降順で返す)から、draft でない
+	 * 最初のリリースを選ぶ. allow_prerelease が true のときだけ使う経路
+	 * (/releases/latest は draft・prerelease をどちらも除外するが、
+	 * こちらは prerelease を許可しつつ draft だけは除外する必要がある。
+	 * Step A7 で実機確認済み).
+	 *
+	 * @param mixed $releases /releases のレスポンスボディ.
+	 * @return array|null
+	 */
+	private function pick_first_non_draft_release( $releases ) {
+		if ( ! is_array( $releases ) ) {
+			return null;
+		}
+
+		foreach ( $releases as $release ) {
+			if ( is_array( $release ) && empty( $release['draft'] ) ) {
+				return $release;
+			}
+		}
+
+		return null;
 	}
 
 	/**

@@ -33,11 +33,13 @@ $l2dwpghul_updater_register( array(
 | `filter_prefix` | | なし(ライブラリ共通フィルタのみ) |
 | `cache_ttl` | | `21600` |
 | `backoff_ttl` | | `1800` |
-| `allow_prerelease` | | `false`(未実装. 指定しても効果なし) |
+| `allow_prerelease` | | `false` |
 | `token` | | `''`(未実装. 指定しても効果なし) |
 | `asset_pattern` | | `$slug` 前方一致 + `.zip` 後方一致(callable も可) |
 
-`allow_prerelease` は prerelease チャンネル対応(予定)、`token` はプライベートリポジトリ用の GitHub API 認証(予定)のためのキーで、README には設定キーとして記載しているが現バージョンでは読み取らない。
+`token` はプライベートリポジトリ用の GitHub API 認証(予定)のためのキーで、README には設定キーとして記載しているが現バージョンでは読み取らない。
+
+`allow_prerelease` を `true` にすると、`/releases/latest`(prerelease・draft をどちらも除外)ではなく `/releases` 一覧を取得し、`draft` でない先頭のリリース(prerelease を含む)を最新として扱う。`/releases` は公開日時降順で返るため、先頭から順に draft でないものを探す。
 
 `basename` / `version` / `requires` / `requires_php` / `tested` / `name` / `author` は `plugin_file` から `plugin_basename()` と `get_file_data()` で導出される。
 

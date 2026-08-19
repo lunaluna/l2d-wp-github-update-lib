@@ -741,4 +741,78 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 
 		$this->assertInstanceOf( 'WP_Error', $result );
 	}
+
+	// -------------------------------------------------------------------------
+	// prerelease チャンネル(新機能 4b)
+	// -------------------------------------------------------------------------
+
+	/**
+	 * allow_prerelease が既定(false)のとき、/releases/latest を叩くこと.
+	 */
+	public function test_allow_prerelease_defaults_to_releases_latest_endpoint() {
+		$updater = $this->make_updater();
+		$updater->stub_response = $this->ok_response( $this->release_body() );
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$updater->check_for_update( $transient );
+
+		$this->assertSame(
+			array( 'https://api.github.com/repos/lunaluna/fake-plugin/releases/latest' ),
+			$updater->requested_urls
+		);
+	}
+
+	/**
+	 * allow_prerelease が true のとき、/releases(一覧)を叩くこと.
+	 */
+	public function test_allow_prerelease_true_uses_releases_list_endpoint() {
+		$updater = $this->make_updater( array( 'allow_prerelease' => true ) );
+		$updater->stub_response = $this->ok_response( array( $this->release_body() ) );
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$updater->check_for_update( $transient );
+
+		$this->assertSame(
+			array( 'https://api.github.com/repos/lunaluna/fake-plugin/releases' ),
+			$updater->requested_urls
+		);
+	}
+
+	/**
+	 * allow_prerelease が true のとき、一覧の先頭が draft でもスキップして
+	 * 最初の非 draft リリース(prerelease でもよい)を採用すること.
+	 */
+	public function test_allow_prerelease_skips_draft_and_accepts_prerelease() {
+		$updater = $this->make_updater( array( 'allow_prerelease' => true ) );
+		$updater->stub_response = $this->ok_response(
+			array(
+				array_merge( $this->release_body( array( 'tag_name' => 'v2.0.0' ) ), array( 'draft' => true ) ),
+				array_merge( $this->release_body( array( 'tag_name' => 'v1.5.0-beta' ) ), array( 'draft' => false, 'prerelease' => true ) ),
+				array_merge( $this->release_body( array( 'tag_name' => 'v1.0.0' ) ), array( 'draft' => false, 'prerelease' => false ) ),
+			)
+		);
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$result    = $updater->check_for_update( $transient );
+
+		$this->assertSame( '1.5.0-beta', $result->response['fake-plugin/fake-plugin.php']->new_version );
+	}
+
+	/**
+	 * allow_prerelease が true で、一覧がすべて draft のとき、更新なしとして
+	 * 扱うこと.
+	 */
+	public function test_allow_prerelease_returns_null_when_all_releases_are_draft() {
+		$updater = $this->make_updater( array( 'allow_prerelease' => true ) );
+		$updater->stub_response = $this->ok_response(
+			array(
+				array_merge( $this->release_body(), array( 'draft' => true ) ),
+			)
+		);
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$result    = $updater->check_for_update( $transient );
+
+		$this->assertSame( $transient, $result );
+	}
 }
