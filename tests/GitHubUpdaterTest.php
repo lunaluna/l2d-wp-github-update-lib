@@ -212,6 +212,60 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		$this->assertSame( 'fake-plugin', $result->slug );
 	}
 
+	/**
+	 * name / author の config が未指定のとき、plugin_file のヘッダーから
+	 * 導出されること(Author URI があればリンク化されること)を確認する.
+	 */
+	public function test_name_and_author_default_to_plugin_headers() {
+		$updater = $this->make_updater();
+		$updater->stub_response = $this->ok_response( $this->release_body() );
+
+		$result = $updater->plugin_info( false, 'plugin_information', (object) array( 'slug' => 'fake-plugin' ) );
+
+		$this->assertSame( 'Fake Plugin', $result->name );
+		$this->assertSame( '<a href="https://example.com/fake-author">Fake Author</a>', $result->author );
+	}
+
+	/**
+	 * name / author を config で明示指定すると、ヘッダー由来の値より
+	 * 優先されることを確認する.
+	 */
+	public function test_name_and_author_config_overrides_take_precedence() {
+		$updater = $this->make_updater(
+			array(
+				'name'   => 'Custom Display Name',
+				'author' => 'Custom Author HTML',
+			)
+		);
+		$updater->stub_response = $this->ok_response( $this->release_body() );
+
+		$result = $updater->plugin_info( false, 'plugin_information', (object) array( 'slug' => 'fake-plugin' ) );
+
+		$this->assertSame( 'Custom Display Name', $result->name );
+		$this->assertSame( 'Custom Author HTML', $result->author );
+	}
+
+	/**
+	 * cache_key を明示指定すると、それがサイトトランジエントキーとして
+	 * 使われること(FAUC の既存インストールとの後方互換に必要).
+	 */
+	public function test_cache_key_can_be_overridden() {
+		$updater = $this->make_updater( array( 'cache_key' => 'FAUC_github_release_cache' ) );
+
+		$GLOBALS['l2d_test_site_transients']['FAUC_github_release_cache'] = $this->release_body();
+
+		$updater->after_update(
+			new stdClass(),
+			array(
+				'action'  => 'update',
+				'type'    => 'plugin',
+				'plugins' => array( 'fake-plugin/fake-plugin.php' ),
+			)
+		);
+
+		$this->assertArrayNotHasKey( 'FAUC_github_release_cache', $GLOBALS['l2d_test_site_transients'] );
+	}
+
 	// -------------------------------------------------------------------------
 	// check_for_update()
 	// -------------------------------------------------------------------------
@@ -536,5 +590,51 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		$updater->check_for_update( $transient );
 
 		$this->assertSame( 1, $calls );
+	}
+
+	/**
+	 * filter_prefix を設定すると、旧フィルタ名(<prefix>_github_updater_cache_ttl)
+	 * でも cache_ttl が上書きされること(後方互換).
+	 */
+	public function test_filter_prefix_enables_legacy_cache_ttl_filter() {
+		$calls = 0;
+		$GLOBALS['l2d_test_filters']['fauc_github_updater_cache_ttl'] = array(
+			function ( $ttl ) use ( &$calls ) {
+				++$calls;
+				return $ttl;
+			},
+		);
+
+		$updater = $this->make_updater( array( 'filter_prefix' => 'fauc' ) );
+		$updater->stub_response = $this->ok_response( $this->release_body() );
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$updater->check_for_update( $transient );
+
+		$this->assertSame( 1, $calls );
+	}
+
+	/**
+	 * filter_prefix を設定すると、旧フィルタ名(<prefix>_github_updater_backoff_ttl)
+	 * でも backoff_ttl が上書きされること(後方互換). バックオフが実際に
+	 * 発生する HTTP 失敗シナリオで、フィルタが呼ばれたことを検証する.
+	 */
+	public function test_filter_prefix_enables_legacy_backoff_ttl_filter() {
+		$calls = 0;
+		$GLOBALS['l2d_test_filters']['fauc_github_updater_backoff_ttl'] = array(
+			function ( $ttl ) use ( &$calls ) {
+				++$calls;
+				return $ttl;
+			},
+		);
+
+		$updater = $this->make_updater( array( 'filter_prefix' => 'fauc' ) );
+		$updater->stub_response = new WP_Error();
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$updater->check_for_update( $transient );
+
+		$this->assertSame( 1, $calls );
+		$this->assertSame( array(), $GLOBALS['l2d_test_site_transients']['l2dwpghul_updater_' . md5( 'lunaluna/fake-plugin' )] );
 	}
 }
