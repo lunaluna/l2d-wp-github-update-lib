@@ -242,22 +242,63 @@ bash lib/l2d-updater/bin/build-zip.sh
 現状: ブランチ `main`(clean)、**`lib/l2d-updater` は未組込**、タグは素の semver
 (1.3.0〜1.4.1、`v0.10.0` は歴史的な例外)。
 
-`release.yml` は**完全に独自**(`plugin-release.yml` も composite action も使わず、
-バージョン整合チェックをインラインで持ち、フォント生成 / `vendor-pdf.zip` /
-Action Scheduler 同梱がある)。`bin/` にも独自スクリプトが 2 本ある。
+> ⚠️ **他の3リポジトリと性質が違う。WPMAR は既に独自の更新機構を持っている。**
+> `includes/class-wpmar-github-updater.php`(369 行、`WPMAR_GitHub_Updater`、静的メソッド構成)が
+> ライブラリと**同じ3フック**(`pre_set_site_transient_update_plugins` / `plugins_api` /
+> `upgrader_process_complete`)を登録している。つまり WPMAR の作業は「追加」ではなく
+> **既存実装からの置き換え(移行)**。そのまま両方入れると二重にフックが登録される。
+> ライブラリの `class-l2d-github-updater.php` は FAUC と WPMAR の updater を統合して
+> 作ったものなので、機能的にはライブラリ側が上位互換。
 
-→ **更新機構だけを入れる。リリース基盤には乗せない。**
+#### 更新機構の移行(WPMAR 固有の作業)
+
+| 現状 | 移行後 |
+|---|---|
+| `includes/class-wpmar-github-updater.php`(369 行) | **削除**。メインファイル L100 の require も外す |
+| `tests/GitHubUpdaterTest.php`(172 行、private static を Reflection で叩くテスト) | **削除**(ライブラリ側の 54 件のテストが引き継ぐ) |
+| `Update URI: https://github.com/lunaluna/wp-maintenance-audit-reporter` | **`Update URI: false` に変更**(ライブラリは wp.org 公式ルート `update_plugins_{$hostname}` を使わない前提) |
+| フィルタ `wpmar_github_updater_cache_ttl` / `..._backoff_ttl` | `'filter_prefix' => 'wpmar'` を渡せば**両方そのまま効く**(後方互換用の設定キー) |
+| トランジェント `wpmar_github_release_cache` | `'cache_key' => 'wpmar_github_release_cache'` を渡して**既存キーを維持**(省略すると `l2dwpghul_updater_<md5>` に変わり、既存サイトのキャッシュが載り替わる) |
+
+したがって登録はこうなる:
+
+```php
+$l2dwpghul_updater_register = require plugin_dir_path( __FILE__ ) . 'lib/l2d-updater/loader.php';
+$l2dwpghul_updater_register( array(
+	'plugin_file'   => __FILE__,
+	'github_repo'   => 'lunaluna/wp-maintenance-audit-reporter',
+	'filter_prefix' => 'wpmar',                        // 既存フィルタ名を維持
+	'cache_key'     => 'wpmar_github_release_cache',   // 既存トランジェントを維持
+) );
+```
+
+#### リリース基盤には乗せない
+
+`release.yml` は**完全に独自**(`plugin-release.yml` も composite action も使わず、
+5 ファイル横断のバージョン整合チェックをインラインで持ち、フォント生成 /
+`vendor-pdf.zip` / Action Scheduler 同梱がある)。`bin/` にも独自スクリプトが 2 本ある。
+汎用の `plugin-release.yml` ではこれらを表現できない。
 
 | 作業 | 内容 |
 |---|---|
 | subtree | **新規 add**(手順 2-B)。削除は不要 |
-| メインファイルの `require` | **要追加**(手順 2-C(1))。`Update URI: false` ヘッダーも確認 |
+| 更新機構 | **要移行**(上表)。単純な `require` 追加ではない |
 | `release.yml` | **変更しない**(独自構成を維持) |
 | `bin/build-zip.sh` | **変更しない**(Action Scheduler 同梱等の独自処理があるため委譲しない) |
 | `.distignore` | **変更不要**。`bin` 行が任意階層に一致するので `lib/l2d-updater/bin/` は既に除外される |
 
-WPMAR で `plugin-release.yml` を採用するかどうかは、このライブラリ移行とは
-独立した別判断。この反映作業に混ぜないこと。
+将来 WPMAR をリリース基盤に乗せる案(独自処理を `bin/build-zip.pre.sh` フックに移し、
+層1の composite action だけを個別に使う形に書き換える)はライブラリ側に受け口があるが、
+**この 1.1.0 反映作業とは独立した別判断**。混ぜないこと。
+
+#### WPMAR の検証(他リポジトリより重い)
+
+更新機構を差し替えるため、チェックリスト(第 4 節)に加えて実機確認が必要:
+
+- 管理画面の更新チェックが従来どおり動くこと(更新通知 → ワンクリック更新)
+- `wpmar_github_updater_cache_ttl` / `..._backoff_ttl` のフィルタが引き続き効くこと
+- 既存トランジェント `wpmar_github_release_cache` が使われていること
+- フックが二重登録されていないこと(旧クラスの削除漏れ)
 
 ### 3-4. [flamingo-csv-sjis-exporter](/Users/mkgq3lla/private/flamingo-csv-sjis-exporter/)
 
