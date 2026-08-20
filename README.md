@@ -113,6 +113,8 @@ lib/l2d-updater/
 
 ### 利用側プラグインへの反映
 
+**1.1.0 への移行手順とリポジトリ別の作業一覧は [docs/consumer-integration-1.1.0.md](docs/consumer-integration-1.1.0.md) にまとめてある**(利用側リポジトリで作業するときはこれを読む)。
+
 このライブラリをリリースしただけでは、同梱している各プラグイン(FAUC など)には自動反映されない。追従する場合は、利用側プラグインのリポジトリで以下の2箇所を更新する:
 
 - `release.yml` の `uses: lunaluna/l2d-wp-github-update-lib/.github/workflows/plugin-release.yml@X.Y.Z` の参照タグ
