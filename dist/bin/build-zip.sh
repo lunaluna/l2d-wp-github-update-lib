@@ -49,7 +49,10 @@ if [ ! -f ".distignore" ]; then
   exit 1
 fi
 
-if [ -x "bin/build-zip.pre.sh" ]; then
+# プラグイン固有の前処理フック。bash で明示的に起動するため実行権限は不要
+# (-x 判定にすると、権限が落ちているだけで無言でスキップされ、同梱漏れの zip が
+# 静かに出来上がる失敗モードが生まれる)。フックを止めたい場合はファイルを外す.
+if [ -f "bin/build-zip.pre.sh" ]; then
   echo "Running bin/build-zip.pre.sh ..."
   bash bin/build-zip.pre.sh
 fi
