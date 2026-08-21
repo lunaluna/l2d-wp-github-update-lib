@@ -37,6 +37,16 @@ $l2dwpghul_updater_register( array(
 | `token` | | `''` |
 | `asset_pattern` | | `$slug` 前方一致 + `.zip` 後方一致(callable も可) |
 
+`cache_key` / `filter_prefix` は、既存の独自更新機構からこのライブラリへ移行する際に使う。既存実装が使っていたトランジェントキー名・フィルタ名をそのまま指定すれば、移行後も既存のキャッシュや `add_filter` 済みのコードをそのまま引き継げる(省略するとライブラリ共通の名前になり、移行前のキャッシュ・フィルタとは別物として動く)。フィルタの詳細は [フィルタ](#フィルタ) を参照。
+
+`asset_pattern` は Release のアセットが複数あり、スラッグの前方一致では本体 ZIP を選べない場合に使う。callable を渡すと `extract_zip_url()` がアセットごとに `$name`(アセットのファイル名、例 `my-plugin.1.0.0.zip`)を渡して呼び出し、その戻り値が真になった最初のアセットの URL を採用する。
+
+```php
+'asset_pattern' => function ( $name ) {
+	return 'my-plugin' === substr( $name, 0, 10 ) && '.zip' === substr( $name, -4 );
+},
+```
+
 `allow_prerelease` を `true` にすると、`/releases/latest`(prerelease・draft をどちらも除外)ではなく `/releases` 一覧を取得し、`draft` でない先頭のリリース(prerelease を含む)を最新として扱う。`/releases` は公開日時降順で返るため、先頭から順に draft でないものを探す。
 
 `token` を設定すると、プライベートリポジトリからの更新に対応する。GitHub API リクエストに `Authorization: Bearer <token>` を付け、配布アセットの URL は `asset.browser_download_url` ではなく `asset.url`(Assets API のエンドポイント)を使う。これは `browser_download_url`(github.com の配布ドメイン)が `Authorization` ヘッダーを認識せず 404 になるためで、Assets API URL に `Accept: application/octet-stream` を付ける方式のみがプライベートリポジトリで機能することを実機で確認している。
