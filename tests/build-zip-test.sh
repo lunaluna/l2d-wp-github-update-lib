@@ -15,11 +15,18 @@
 #   7. 利用側の .distignore に bin 行が無くても、ライブラリ自身の bin/
 #      ディレクトリ(= このビルダーが置かれているディレクトリ)は除外される
 #      (シナリオ2。実際の subtree pull 後の配置 lib/l2d-updater/bin/ を再現)
+#   8. bin/build-zip.pre.sh に実行権限が無くても前処理フックが実行される
+#      (シナリオ3。-x → -f 化の回帰ゲート)。生成物は同梱され、フック自身は
+#      .distignore の bin 行で除外される
+#   9. 前処理フックが exit 1 した場合、ビルダーも失敗する(シナリオ3b)
 #
 # 5 は利用側の .distignore に *.zip が無い状態で検証する。これはスクリプト側の
 # 責務として保証すべき挙動であり、利用側の除外設定に依存させないため。
 # 6 は生成物の除外パターンを転送ルートにアンカーした狭いものにしている根拠.
 # 7 は同様に、利用側の除外設定に依存させないという設計方針の検証.
+# 8 は「実行権限が無いだけで無言でスキップされ、同梱漏れの zip が静かに
+# 出来上がる」という -x 判定時代の失敗モードが再発しないことを見るための
+# 回帰ゲート.
 #
 # 実行方法: リポジトリルートで `bash tests/build-zip-test.sh`
 
@@ -250,6 +257,113 @@ if printf '%s\n' "$ENTRIES2" | grep -q -- "^${SLUG2}/lib/l2d-updater/loader.php$
 	pass "同梱: ${SLUG2}/lib/l2d-updater/loader.php"
 else
 	fail "同梱されるべき ${SLUG2}/lib/l2d-updater/loader.php が無い"
+fi
+
+# ---- シナリオ3: 前処理フック(実行権限なしでも走る) --------------------------
+#
+# bin/build-zip.pre.sh に実行権限を付けずに置く。bash で明示的に起動するため
+# 実行権限は不要であり、-x → -f 化によって走ることを検証する(回帰ゲート).
+
+echo
+echo "シナリオ3: 前処理フック(実行権限なしの bin/build-zip.pre.sh)"
+
+SLUG3='fake-consumer-plugin-3'
+VERSION3='3.0.0'
+ZIP_NAME3="${SLUG3}.${VERSION3}.zip"
+PLUGIN_DIR3="${WORK}/${SLUG3}"
+
+mkdir -p "${PLUGIN_DIR3}/bin"
+
+cat > "${PLUGIN_DIR3}/${SLUG3}.php" << 'PHP'
+<?php
+/**
+ * Plugin Name:       Fake Consumer Plugin 3
+ * Version:           3.0.0
+ * Update URI:        false
+ */
+PHP
+
+echo 'readme' > "${PLUGIN_DIR3}/readme.txt"
+cp "$BUILDER" "${PLUGIN_DIR3}/bin/build-zip.sh"
+
+# フック本体。lib/generated/marker.txt を作るだけ. 実行権限は意図的に付けない.
+cat > "${PLUGIN_DIR3}/bin/build-zip.pre.sh" << 'HOOK'
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p lib/generated
+echo 'generated' > lib/generated/marker.txt
+HOOK
+chmod -x "${PLUGIN_DIR3}/bin/build-zip.pre.sh"
+
+cat > "${PLUGIN_DIR3}/.distignore" << 'DISTIGNORE'
+.git
+.github
+.distignore
+bin
+DISTIGNORE
+
+cd "$PLUGIN_DIR3"
+bash bin/build-zip.sh
+
+if [ ! -f "$ZIP_NAME3" ]; then
+	echo "  NG  : シナリオ3のビルドで ${ZIP_NAME3} が生成されなかった" >&2
+	exit 1
+fi
+
+ENTRIES3="$(unzip -Z1 "$ZIP_NAME3")"
+
+if printf '%s\n' "$ENTRIES3" | grep -q -- "^${SLUG3}/lib/generated/marker.txt$"; then
+	pass "実行権限なしのフックが走り、生成物が同梱される"
+else
+	fail "実行権限なしのフックの生成物(lib/generated/marker.txt)が同梱されていない"
+fi
+
+if printf '%s\n' "$ENTRIES3" | grep -q -- "^${SLUG3}/bin/"; then
+	fail "フック自身(bin/)が同梱されている"
+else
+	pass "フック自身(bin/)は同梱されない"
+fi
+
+# ---- シナリオ3b: 前処理フックが失敗したらビルダーも失敗する ------------------
+
+echo
+echo "シナリオ3b: 前処理フックが exit 1 した場合、ビルダーも失敗する"
+
+SLUG3B='fake-consumer-plugin-3b'
+PLUGIN_DIR3B="${WORK}/${SLUG3B}"
+
+mkdir -p "${PLUGIN_DIR3B}/bin"
+
+cat > "${PLUGIN_DIR3B}/${SLUG3B}.php" << 'PHP'
+<?php
+/**
+ * Plugin Name:       Fake Consumer Plugin 3b
+ * Version:           1.0.0
+ * Update URI:        false
+ */
+PHP
+
+echo 'readme' > "${PLUGIN_DIR3B}/readme.txt"
+cp "$BUILDER" "${PLUGIN_DIR3B}/bin/build-zip.sh"
+
+cat > "${PLUGIN_DIR3B}/bin/build-zip.pre.sh" << 'HOOK'
+#!/usr/bin/env bash
+exit 1
+HOOK
+chmod -x "${PLUGIN_DIR3B}/bin/build-zip.pre.sh"
+
+cat > "${PLUGIN_DIR3B}/.distignore" << 'DISTIGNORE'
+.git
+.github
+.distignore
+bin
+DISTIGNORE
+
+cd "$PLUGIN_DIR3B"
+if bash bin/build-zip.sh > /dev/null 2>&1; then
+	fail "前処理フックが exit 1 してもビルダーが成功してしまった"
+else
+	pass "前処理フックが exit 1 したらビルダーも失敗する(set -e の伝播)"
 fi
 
 echo
