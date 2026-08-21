@@ -25,6 +25,23 @@ on:
         description: 'release-notes action に渡す抽出元ファイル(readme.txt など).'
         required: true
         type: string
+      php_version:
+        description: '非空なら setup-php を実行する PHP バージョン(例 8.2). composer で vendor/ を作る利用側向け.'
+        required: false
+        type: string
+        default: ''
+      extra_assets:
+        description: >-
+          本体 ZIP に加えて Release へ添付するファイルの複数行リスト。
+          "path" または "path#label"(gh release create の記法). 空なら何も追加しない.
+        required: false
+        type: string
+        default: ''
+      draft:
+        description: 'true なら draft として作成する. 検証後に `gh release edit <tag> --draft=false` で本公開する.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -60,6 +77,24 @@ jobs:
           version: ${{ steps.resolve.outputs.version }}
           files: ${{ inputs.version_files }}
 
+      - name: Set up PHP
+        if: inputs.php_version != ''
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php_version }}
+          tools: composer:v2
+
+      - name: Run release pre-build hook
+        run: |
+          # 利用側が bin/release.pre.sh を置いていれば、配布 ZIP を組み立てる前に
+          # 実行する。ZIP に同梱する生成物や、extra_assets で添付する追加ファイルを
+          # ここで作る(WPMAR のフォント生成・vendor-pdf.zip など)。
+          # bash で明示的に起動するため実行権限は不要(-f で判定する)。
+          if [ -f bin/release.pre.sh ]; then
+            echo "Running bin/release.pre.sh ..."
+            bash bin/release.pre.sh
+          fi
+
       - name: Build distribution ZIP
         id: build
         uses: lunaluna/l2d-wp-github-update-lib/.github/actions/build-zip@1.1.0
@@ -74,7 +109,33 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          ZIP_NAME: ${{ steps.build.outputs.zip_name }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
+          EXTRA_ASSETS: ${{ inputs.extra_assets }}
+          DRAFT: ${{ inputs.draft }}
         run: |
-          gh release create "${{ steps.resolve.outputs.tag }}" "${{ steps.build.outputs.zip_name }}" \
-            --title "${{ steps.resolve.outputs.tag }}" \
-            --notes-file "${{ steps.notes.outputs.notes_file }}"
+          # gh release create <tag> [<files>...] [flags] の順に組み立てる.
+          ARGS=( "$TAG" "$ZIP_NAME" )
+
+          while IFS= read -r asset; do
+            [ -z "$asset" ] && continue
+            # "path#label" 記法の label 側を落としてから存在確認する.
+            if [ ! -f "${asset%%#*}" ]; then
+              echo "::error::extra_assets に指定された ${asset%%#*} が見つかりません."
+              exit 1
+            fi
+            ARGS+=( "$asset" )
+          done <<< "$EXTRA_ASSETS"
+
+          ARGS+=( --title "$TAG" --notes-file "$NOTES_FILE" )
+
+          if [ "$DRAFT" = "true" ]; then
+            ARGS+=( --draft )
+          fi
+
+          gh release create "${ARGS[@]}"
+
+          if [ "$DRAFT" = "true" ]; then
+            echo "::notice::Draft release created. Verify assets, then run: gh release edit ${TAG} --draft=false"
+          fi
