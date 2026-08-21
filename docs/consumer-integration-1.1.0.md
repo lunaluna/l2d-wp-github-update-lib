@@ -98,11 +98,14 @@ git subtree add --prefix=lib/l2d-updater \
   https://github.com/lunaluna/l2d-wp-github-update-lib.git dist-1.1.0 --squash
 ```
 
-> **未実測**: 「`dist-1.1.0` からの `subtree pull` は無関係な履歴のマージになり競合する」は
-> `subtree split` が独立した履歴を作ることからの推論で、実機では未確認(検証しようとしたが
-> 権限で実行できなかった)。上記は削除 + `add` なのでこの推論が外れていても正しく動くが、
-> 気になる場合は使い捨てブランチで `git subtree pull --prefix=lib/l2d-updater <repo> dist-1.1.0 --squash`
-> を1回試し、競合したらブランチを捨てて上記手順に戻ればよい。**いずれにせよ作業ブランチで行うこと。**
+> **実測済み**(2026-08-20、gpbpn での作業時): 「`dist-1.1.0` からの `subtree pull` は
+> 無関係な履歴のマージになり競合する」という推論は外れており、実際には競合せず
+> `exit 0` で完了する(取り込まれる4ファイルは `git subtree split` の生成結果とハッシュが
+> 一致)。ただし squash コミットメッセージに旧 `main` 系履歴由来の `REVERT:` 行が約30行
+> 残ってしまい可読性を損なうため、gpbpn では**削除 + `subtree add` し直す方式を採用した**
+> (競合回避のためではなく、可読性の観点での選択)。気になる場合は使い捨てブランチで
+> `git subtree pull --prefix=lib/l2d-updater <repo> dist-1.1.0 --squash` を1回試し、
+> squash メッセージの見え方で判断すればよい。**いずれにせよ作業ブランチで行うこと。**
 
 削除 → `add` の2コミットに分けるのは、`git rm -r` が破壊的操作でありレビュー時に
 差分を追いやすくするため。
@@ -348,9 +351,10 @@ unzip -Z1 <slug>.<version>.zip | grep l2d-updater
 - **バージョン交渉**: 片方のプラグインだけ 1.1.0 にした状態で WordPress 管理画面を開き、
   両プラグインの更新チェックが従来どおり動くこと(`loader.php` の自己申告バージョンで
   新しい方が勝つ設計。1.1.0 と 1.0.x の混在は正常な状態)
-- **利用側の Release 実行**: `plugin-release.yml@1.1.0` を採用したリポジトリのうち
-  **どれか 1 つ**で実際にタグを打ち、Release が成功すること
-  (数字始まりタグの `uses: ...@1.1.0` 参照と composite action 参照を実測する。**未実測**)
+- **利用側の Release 実行**: ✅ **実測済み**(2026-08-20、flamingo-csv-sjis-exporter)。
+  `plugin-release.yml@1.1.0` の初実行が成功し、数字始まりタグの `uses: ...@1.1.0` 参照と
+  composite action 参照が問題なく解決されることを確認済み。詳細は
+  flamingo-csv-sjis-exporter プロジェクトのメモリ `fcse-1-2-0-updater-plan` を参照
 
 ---
 

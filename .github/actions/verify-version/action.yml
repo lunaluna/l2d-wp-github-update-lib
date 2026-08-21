@@ -10,9 +10,11 @@ inputs:
     description: >-
       "path:pattern" 形式の複数行。各行について、path 内で pattern に
       マッチした行から値を抽出し、version と一致するか確認する。
-      値の抽出は、マッチ行にシングルクォート区切りの値があればそれを
-      (例 define('FAUC_VERSION', '1.9.0'))、なければ pattern 直後の
-      コロン以降(空白除去)を使う(例 "Version: 1.9.0"、"Stable tag: 1.9.0").
+      値の抽出は次の優先順で行う: (1) マッチ行にシングルクォート区切りの
+      値があればそれ(例 define('FAUC_VERSION', '1.9.0'))、(2) なければ
+      ダブルクォート区切りの値(例 composer.json の "version": "1.5.0",)、
+      (3) どちらも無ければ pattern 直後のコロン以降(空白除去)を使う
+      (例 "Version: 1.9.0"、"Stable tag: 1.9.0").
     required: true
 runs:
   using: 'composite'
@@ -48,6 +50,10 @@ runs:
 
           if echo "$MATCHED_LINE" | grep -qE "'[^']+'"; then
             FOUND=$(echo "$MATCHED_LINE" | sed -E "s/.*'([^']+)'.*/\1/")
+          elif echo "$MATCHED_LINE" | grep -qE '"[^"]+"'; then
+            # JSON の "version": "1.5.0", のような行。greedy な .* により行内の
+            # 最後のダブルクォート値を取るので、キー側("version")ではなく値を取る.
+            FOUND=$(echo "$MATCHED_LINE" | sed -E 's/.*"([^"]+)".*/\1/')
           else
             FOUND=$(echo "$MATCHED_LINE" | sed -E "s/^.*${PATTERN}[[:space:]]*//")
           fi

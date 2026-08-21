@@ -4,7 +4,7 @@
 
 **このリポジトリでバージョンをリリースするときは、以下の手順を必ず順番通りに踏むこと。**
 
-このリポジトリ自身にはタグ push で配布物を組み立てる `release.yml` が無い(`plugin-release.yml` は他リポジトリが `workflow_call` で使う側)。そのため、以下が唯一のリリースフローになる。
+このリポジトリには、タグ push で発火する `release.yml`(`verify-loader-version` / `publish-dist` の2 job)がある。`plugin-release.yml` はこれとは別物で、他リポジトリが `workflow_call` で使う reusable workflow である。
 
 **タグ慣習**: タグに **v 接頭辞は付けない**(素の semver。利用側プラグインと同じ慣習)。`v1.0.4` 以前は v 付きだった歴史的経緯があるが、既存タグは利用側プラグインが現に参照しているため削除しない。
 
