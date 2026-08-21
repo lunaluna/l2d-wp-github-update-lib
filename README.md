@@ -56,7 +56,13 @@ if ( $filter_prefix ) {
 }
 ```
 
-対象: `enabled` / `cache_ttl` / `backoff_ttl`。
+対象は次の3つ。いずれも GitHub から最新リリース情報を取得する処理(`fetch_latest_release()`)の内側で適用されるため、`add_filter` するだけで即座に挙動が変わる(再登録や設定変更は不要)。
+
+| フィルタ | 既定値 | できること |
+|---|---|---|
+| `l2dwpghul_updater_enabled` | `true` | `false` を返すと更新チェック自体を止めるキルスイッチ。GitHub API へのリクエストも発生しなくなる。特定環境(ステージングなど)や条件下で更新チェックを止めたい場合に使う |
+| `l2dwpghul_updater_cache_ttl` | 設定キー `cache_ttl`(既定 `21600` 秒 = 6時間) | GitHub から正常に取得できた最新リリース情報をサイトトランジェントにキャッシュする秒数。短くすると更新通知が早く反映される代わりに GitHub API へのリクエスト頻度が上がる |
+| `l2dwpghul_updater_backoff_ttl` | 設定キー `backoff_ttl`(既定 `1800` 秒 = 30分) | GitHub API へのリクエストが失敗したときに、その失敗結果を保持しておく秒数(バックオフ)。この間は再リクエストせず更新チェックを `null` で返す。GitHub API の未認証レート制限(実測 60 req/h)に配慮した設計 |
 
 ### 更新の入口
 
