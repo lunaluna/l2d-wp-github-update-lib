@@ -98,9 +98,35 @@ lib/l2d-updater/
 └── bin/build-zip.sh
 ```
 
+## `plugin-release.yml`(reusable workflow)
+
+単純な構成の利用側プラグイン(FAUC / get-patterns-by-pattern-name / flamingo-csv-sjis-exporter)が `workflow_call` で使うリリース用ワークフロー。WPMAR のような複雑な `release.yml`(フォント生成・`vendor-pdf.zip` 生成等)を持つリポジトリはこれを使わず、composite actions を個別に使う。
+
+### 入力
+
+| 入力 | 必須 | 既定値 | 用途 |
+|---|---|---|---|
+| `slug` | ✅ | — | プラグインスラッグ |
+| `version_files` | ✅ | — | `verify-version` action に渡す `"path:pattern"` の複数行 |
+| `notes_source` | ✅ | — | `release-notes` action に渡す抽出元ファイル(`readme.txt` など) |
+| `php_version` | | `''` | 非空なら `setup-php` を実行する PHP バージョン(例 `8.2`)。composer で `vendor/` を作る利用側向け |
+| `extra_assets` | | `''` | 本体 ZIP に加えて Release へ添付するファイルの複数行リスト。`"path"` または `"path#label"`(`gh release create` の記法) |
+| `draft` | | `false` | `true` なら draft として作成する。検証後に `gh release edit <tag> --draft=false` で本公開する |
+
+`version_files` のパターンに一致した行からの値抽出は次の優先順で行う: (1) シングルクォート区切りの値(例 `define('FAUC_VERSION', '1.9.0')`)、(2) ダブルクォート区切りの値(例 `composer.json` の `"version": "1.5.0",`)、(3) どちらも無ければパターン直後のコロン以降(空白除去、例 `Stable tag: 1.9.0`)。
+
+### 2つの前処理フック
+
+利用側がファイルを置くと、いずれも `bash` で明示起動されるためビルド前に自動実行される(実行権限は不要):
+
+- **`bin/build-zip.pre.sh`** — 汎用ビルダー(`build-zip.sh`)がステージング**前**に実行する。**ZIP に同梱する**生成物を作る(委譲していれば `dist/bin/build-zip.sh` から発火)
+- **`bin/release.pre.sh`** — `plugin-release.yml` が `build-zip` の**前**に実行する。**Release に添付する追加アセット**(`extra_assets` で指定するもの)や、ZIP に同梱する生成物を作る
+
+両者は「誰が呼ぶか」が異なる: `build-zip.pre.sh` はビルダー自体(ローカル実行でも `plugin-release.yml` 経由でも走る)、`release.pre.sh` は `plugin-release.yml` のジョブ内のみで走る。
+
 ## リリース手順
 
-このリポジトリ自身にはタグ push で配布物を組み立てる release.yml が無い(`plugin-release.yml` は他リポジトリが `workflow_call` で使う側)。リリースは以下の手順を**必ず順番通りに**踏む。
+このリポジトリには、タグ push で発火する `release.yml`(`verify-loader-version` / `publish-dist` の2 job)がある。`plugin-release.yml` はこれとは別物で、他リポジトリが `workflow_call` で使う reusable workflow である。リリースは以下の手順を**必ず順番通りに**踏む。
 
 1. `dist/loader.php` の `l2dwpghul_updater_register()` 第一引数(自己申告バージョン、例 `'1.0.3'`)を新しいバージョンに手動で書き換える。他の変更と混ぜず、専用コミットにする(過去の実績: `loader.phpの自己申告バージョンを1.0.3へ更新`)
 2. 横断検索して、他に現在バージョンを指す表記が残っていないか確認する(`grep -rn "<旧バージョン>" . --exclude-dir=vendor --exclude-dir=.git`)
@@ -120,7 +146,7 @@ lib/l2d-updater/
 - `release.yml` の `uses: lunaluna/l2d-wp-github-update-lib/.github/workflows/plugin-release.yml@X.Y.Z` の参照タグ
 - `git subtree pull --prefix=lib/l2d-updater https://github.com/lunaluna/l2d-wp-github-update-lib.git dist-X.Y.Z --squash` でベンダーコピー(`lib/l2d-updater/`)を更新
 
-**初回のみ**: 既存のベンダーコピーは `main` 系の履歴から取り込んだものなので、`dist` 系タグからの `git subtree pull` は無関係な履歴のマージとして競合する。初回だけ削除してから `subtree add` し直す(以後は通常の `subtree pull` で追従できる):
+**初回のみ**: 既存のベンダーコピーは `main` 系の履歴から取り込んだものであり、`dist` 系タグからの `git subtree pull` は無関係な履歴のマージになる。実測では競合せず `exit 0` で完了する(gpbpn での作業で確認済み)が、squash コミットメッセージに旧 `main` 系履歴由来の `REVERT:` 行が約30行残ってしまい可読性を損なう。そのため初回は削除してから `subtree add` し直すことを推奨する(以後は通常の `subtree pull` で追従できる):
 
 ```sh
 git rm -r lib/l2d-updater && git commit -m "..."
