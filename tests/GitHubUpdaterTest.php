@@ -69,6 +69,18 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 * @return array
 	 */
 	private function release_body( array $overrides = array() ) {
+		// tag_name だけを上書きしたときは、1.3.0 以降の完全一致の規則(アセット名 = スラッグ.タグの版.zip)に
+		// 合わせて、アセット名もタグの版から導出する.
+		if ( isset( $overrides['tag_name'] ) && ! isset( $overrides['assets'] ) && is_string( $overrides['tag_name'] ) ) {
+			$asset_name          = 'fake-plugin.' . L2dwpghul_GitHub_Updater::normalize_version( $overrides['tag_name'] ) . '.zip';
+			$overrides['assets'] = array(
+				array(
+					'name'                 => $asset_name,
+					'browser_download_url' => 'https://example.com/' . $asset_name,
+				),
+			);
+		}
+
 		return array_merge(
 			array(
 				'tag_name'     => 'v1.2.0',
@@ -108,11 +120,12 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	}
 
 	/**
-	 * extract_zip_url() がプラグインスラッグで始まる .zip アセットの
+	 * extract_zip_url() が「{スラッグ}.{タグの版}.zip」と完全一致するアセットの
 	 * ダウンロード URL を選ぶことを確認する.
 	 */
 	public function test_extract_zip_url_picks_matching_asset() {
 		$body = array(
+			'tag_name' => 'v1.2.0',
 			'assets' => array(
 				array(
 					'name'                 => 'source-code.zip',
@@ -137,6 +150,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_extract_zip_url_returns_null_when_no_match() {
 		$body = array(
+			'tag_name' => 'v1.2.0',
 			'assets' => array(
 				array(
 					'name'                 => 'source-code.zip',
@@ -181,6 +195,155 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		$this->assertSame(
 			'https://example.com/fake-plugin.1.2.0.zip',
 			L2dwpghul_GitHub_Updater::extract_zip_url( $body, $pattern )
+		);
+	}
+
+	/**
+	 * 指定した名前のアセットだけを持つリリースボディを作る.
+	 *
+	 * @param string   $tag   tag_name.
+	 * @param string[] $names アセット名の一覧.
+	 * @return array
+	 */
+	private function body_with_assets( $tag, array $names ) {
+		$assets = array();
+		foreach ( $names as $name ) {
+			$assets[] = array(
+				'name'                 => $name,
+				'browser_download_url' => 'https://example.com/' . $name,
+			);
+		}
+		return array(
+			'tag_name' => $tag,
+			'assets'   => $assets,
+		);
+	}
+
+	/**
+	 * 前方一致だけで通っていた名前(別名の ZIP・チェックサム・版の不一致)を拒否すること.
+	 *
+	 * @dataProvider provider_rejected_asset_names
+	 *
+	 * @param string $name アセット名.
+	 */
+	public function test_extract_zip_url_rejects_non_exact_names( $name ) {
+		$body = $this->body_with_assets( 'v1.2.0', array( $name ) );
+
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * 拒否すべきアセット名の一覧(タグは 1.2.0 の想定).
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public function provider_rejected_asset_names() {
+		return array(
+			'別名の ZIP'              => array( 'fake-plugin-dev.zip' ),
+			'チェックサム'            => array( 'fake-plugin.1.2.0.zip.sha256' ),
+			'プレリリース表記の別版'  => array( 'fake-plugin.1.2.0-beta.zip' ),
+			'版の不一致'              => array( 'fake-plugin.1.1.0.zip' ),
+			'版なし'                  => array( 'fake-plugin.zip' ),
+			'大文字小文字の違い'      => array( 'Fake-Plugin.1.2.0.zip' ),
+		);
+	}
+
+	/**
+	 * semver に収まらないタグ(WPMAR の実例)でも、完全一致なら採用すること.
+	 *
+	 * @dataProvider provider_non_semver_tags
+	 *
+	 * @param string $tag     tag_name.
+	 * @param string $version アセット名に入る版.
+	 */
+	public function test_extract_zip_url_accepts_non_semver_tags( $tag, $version ) {
+		$name = 'fake-plugin.' . $version . '.zip';
+		$body = $this->body_with_assets( $tag, array( 'vendor-pdf.zip', $name ) );
+
+		$this->assertSame( 'https://example.com/' . $name, L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * 通すべきタグの一覧.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public function provider_non_semver_tags() {
+		return array(
+			'素の semver'      => array( '1.2.0', '1.2.0' ),
+			'v 接頭辞'         => array( 'v1.2.0', '1.2.0' ),
+			'4 桁'             => array( '1.5.2.1', '1.5.2.1' ),
+			'RC 表記'          => array( '1.0.0-RC14', '1.0.0-RC14' ),
+		);
+	}
+
+	/**
+	 * 文字列パターンで tag_name が無い・文字列でないときは、版が決まらないので null になること.
+	 */
+	public function test_extract_zip_url_returns_null_without_valid_tag_name() {
+		$body = $this->body_with_assets( '1.2.0', array( 'fake-plugin.1.2.0.zip' ) );
+
+		unset( $body['tag_name'] );
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+
+		$body['tag_name'] = array( '1.2.0' );
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * 同名アセットが複数あるとき(防御)、先頭を採らずに null になること.
+	 */
+	public function test_extract_zip_url_returns_null_on_duplicate_exact_names() {
+		$body = $this->body_with_assets( '1.2.0', array( 'fake-plugin.1.2.0.zip', 'fake-plugin.1.2.0.zip' ) );
+
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * callable は複数のアセットに一致したら、先頭を採らずに null になること(1.3.0 の挙動変更).
+	 * 一致が 1 件なら、版の検証なしでその URL を返す.
+	 */
+	public function test_extract_zip_url_callable_requires_unique_match() {
+		$body = $this->body_with_assets( '1.2.0', array( 'a.zip', 'b.zip', 'c.txt' ) );
+
+		$this->assertNull(
+			L2dwpghul_GitHub_Updater::extract_zip_url(
+				$body,
+				function ( $name ) {
+					return '.zip' === substr( $name, -4 );
+				}
+			)
+		);
+
+		$this->assertSame(
+			'https://example.com/b.zip',
+			L2dwpghul_GitHub_Updater::extract_zip_url(
+				$body,
+				function ( $name ) {
+					return 'b.zip' === $name;
+				}
+			)
+		);
+	}
+
+	/**
+	 * Assets API 経路(トークン利用時)でも、完全一致の規則で asset.url を返すこと.
+	 */
+	public function test_extract_zip_url_uses_api_url_with_exact_match() {
+		$body = array(
+			'tag_name' => '1.2.0',
+			'assets'   => array(
+				array(
+					'name'                 => 'fake-plugin.1.2.0.zip',
+					'url'                  => 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/1',
+					'browser_download_url' => 'https://example.com/fake-plugin.1.2.0.zip',
+				),
+			),
+		);
+
+		$this->assertSame(
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/1',
+			L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin', true )
 		);
 	}
 
@@ -442,6 +605,147 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		$this->assertSame( $transient, $result );
 	}
 
+	/**
+	 * 異常なレスポンスのとき、更新なしになりバックオフ(空配列)がキャッシュされること.
+	 *
+	 * @dataProvider provider_abnormal_responses
+	 *
+	 * @param array|WP_Error $response スタブするレスポンス.
+	 */
+	public function test_abnormal_response_results_in_backoff( $response ) {
+		$updater                = $this->make_updater();
+		$updater->stub_response = $response;
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$result    = $updater->check_for_update( $transient );
+
+		$this->assertSame( $transient, $result );
+		$this->assertSame( array(), $GLOBALS['l2d_test_site_transients']['l2dwpghul_updater_' . md5( 'lunaluna/fake-plugin' )] );
+	}
+
+	/**
+	 * 異常レスポンスの一覧(HTTP ステータス・タイムアウト・不正な本文・型の崩れたフィールド).
+	 *
+	 * @return array<string, array{0: array|WP_Error}>
+	 */
+	public function provider_abnormal_responses() {
+		$cases = array();
+
+		foreach ( array( 401, 403, 404, 429, 500, 503 ) as $code ) {
+			$cases[ 'HTTP ' . $code ] = array(
+				array(
+					'response' => array( 'code' => $code ),
+					'body'     => wp_json_encode( array( 'message' => 'error' ) ),
+				),
+			);
+		}
+
+		$cases['WP_Error(タイムアウト想定)'] = array( new WP_Error( 'http_request_failed', 'cURL error 28' ) );
+
+		$json = function ( $body ) {
+			return array(
+				'response' => array( 'code' => 200 ),
+				'body'     => $body,
+			);
+		};
+
+		$cases['空ボディ']          = array( $json( '' ) );
+		$cases['不正な JSON']       = array( $json( '{broken' ) );
+		$cases['JSON が null']      = array( $json( 'null' ) );
+		$cases['JSON が数値']       = array( $json( '123' ) );
+		$cases['JSON が文字列']     = array( $json( '"text"' ) );
+		$cases['tag_name が配列']   = array( $json( wp_json_encode( $this->release_body( array( 'tag_name' => array( 'v1.2.0' ) ) ) ) ) );
+		$cases['tag_name が数値']   = array( $json( wp_json_encode( $this->release_body( array( 'tag_name' => 120 ) ) ) ) );
+		$cases['tag_name が空']     = array( $json( wp_json_encode( $this->release_body( array( 'tag_name' => '' ) ) ) ) );
+		$cases['assets が文字列']   = array( $json( wp_json_encode( $this->release_body( array( 'assets' => 'fake-plugin.1.2.0.zip' ) ) ) ) );
+		$cases['asset が文字列のみ'] = array( $json( wp_json_encode( $this->release_body( array( 'assets' => array( 'fake-plugin.1.2.0.zip' ) ) ) ) ) );
+		$cases['asset の name が配列'] = array(
+			$json(
+				wp_json_encode(
+					$this->release_body(
+						array(
+							'assets' => array(
+								array(
+									'name'                 => array( 'fake-plugin.1.2.0.zip' ),
+									'browser_download_url' => 'https://example.com/fake-plugin.1.2.0.zip',
+								),
+							),
+						)
+					)
+				)
+			),
+		);
+		$cases['asset の URL が配列'] = array(
+			$json(
+				wp_json_encode(
+					$this->release_body(
+						array(
+							'assets' => array(
+								array(
+									'name'                 => 'fake-plugin.1.2.0.zip',
+									'browser_download_url' => array( 'https://example.com/x.zip' ),
+								),
+							),
+						)
+					)
+				)
+			),
+		);
+
+		return $cases;
+	}
+
+	/**
+	 * body / published_at が文字列でないとき、空文字として扱い、警告を出さないこと.
+	 */
+	public function test_non_string_notes_and_published_at_become_empty_strings() {
+		$updater                = $this->make_updater();
+		$updater->stub_response = $this->ok_response(
+			$this->release_body(
+				array(
+					'body'         => array( 'x' ),
+					'published_at' => 12345,
+				)
+			)
+		);
+
+		$result = $updater->plugin_info( false, 'plugin_information', (object) array( 'slug' => 'fake-plugin' ) );
+
+		$this->assertSame( '', $result->last_updated );
+	}
+
+	/**
+	 * バックオフ中は、HTTP ステータスにかかわらず再リクエストしないこと.
+	 */
+	public function test_backoff_blocks_further_requests_after_error_status() {
+		$updater                = $this->make_updater();
+		$updater->stub_response = array(
+			'response' => array( 'code' => 429 ),
+			'body'     => '',
+		);
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+
+		$updater->check_for_update( $transient );
+		$updater->check_for_update( $transient );
+
+		$this->assertCount( 1, $updater->requested_urls );
+	}
+
+	/**
+	 * トークン付きで失敗しても、エラー系の副作用(キャッシュ)にトークンが混入しないこと.
+	 */
+	public function test_token_is_not_leaked_into_cache_on_failure() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token-xyz' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 401 ),
+			'body'     => '',
+		);
+
+		$updater->check_for_update( (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) ) );
+
+		$this->assertStringNotContainsString( 'secret-token-xyz', serialize( $GLOBALS['l2d_test_site_transients'] ) );
+	}
+
 	// -------------------------------------------------------------------------
 	// plugin_info()
 	// -------------------------------------------------------------------------
@@ -650,6 +954,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_rename_source_directory_renames_when_plugin_matches_and_name_differs() {
 		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( '/tmp/wp-upgrade/wrong-dir-name/fake-plugin.php' );
 
 		$result = $updater->rename_source_directory(
 			'/tmp/wp-upgrade/wrong-dir-name/',
@@ -695,6 +1000,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_rename_source_directory_skips_when_name_already_matches() {
 		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( '/tmp/wp-upgrade/fake-plugin/fake-plugin.php' );
 
 		$result = $updater->rename_source_directory(
 			'/tmp/wp-upgrade/fake-plugin/',
@@ -730,6 +1036,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_rename_source_directory_returns_wp_error_on_move_failure() {
 		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( '/tmp/wp-upgrade/wrong-dir-name/fake-plugin.php' );
 		$GLOBALS['wp_filesystem']->move_should_fail = true;
 
 		$result = $updater->rename_source_directory(
@@ -740,6 +1047,59 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		);
 
 		$this->assertInstanceOf( 'WP_Error', $result );
+	}
+
+	/**
+	 * 展開されたディレクトリにメインファイルが無いとき、WP_Error で中止すること
+	 * (名前が一致していてもリネームが必要でも確認する). move() は呼ばない.
+	 *
+	 * @dataProvider provider_source_directories
+	 *
+	 * @param string $source 展開直後のソースディレクトリ.
+	 */
+	public function test_rename_source_directory_aborts_when_main_file_missing( $source ) {
+		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( $source . 'readme.txt' );
+
+		$result = $updater->rename_source_directory(
+			$source,
+			$source,
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertSame( 'l2dwpghul_invalid_package', $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moved_calls );
+	}
+
+	/**
+	 * メインファイルの有無を確認するソースディレクトリ(名前が一致 / 不一致).
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public function provider_source_directories() {
+		return array(
+			'名前が一致'   => array( '/tmp/wp-upgrade/fake-plugin/' ),
+			'名前が不一致' => array( '/tmp/wp-upgrade/wrong-dir-name/' ),
+		);
+	}
+
+	/**
+	 * 他のプラグインの更新では、メインファイルの確認をせず介入しないこと.
+	 */
+	public function test_rename_source_directory_does_not_check_main_file_for_other_plugins() {
+		$updater = $this->make_updater();
+		// existing_paths は空(メインファイルなし)のまま.
+
+		$result = $updater->rename_source_directory(
+			'/tmp/wp-upgrade/other-plugin/',
+			'/tmp/wp-upgrade/other-plugin/',
+			new stdClass(),
+			array( 'plugin' => 'other-plugin/other-plugin.php' )
+		);
+
+		$this->assertSame( '/tmp/wp-upgrade/other-plugin/', $result );
 	}
 
 	// -------------------------------------------------------------------------
@@ -979,5 +1339,420 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		);
 
 		$this->assertInstanceOf( 'WP_Error', $result );
+	}
+
+	/**
+	 * pre_download_package(): 許可されない URL のときは、WP_Error を返し、HTTP 通信も
+	 * 一時ファイル作成もしないこと(トークンを送らない). エラーメッセージに URL・トークンも含めない.
+	 *
+	 * @dataProvider provider_disallowed_package_urls
+	 *
+	 * @param mixed $package 許可されないはずの URL.
+	 */
+	public function test_pre_download_package_rejects_disallowed_urls( $package ) {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => 'zip-bytes',
+		);
+
+		$before = count( glob( sys_get_temp_dir() . '/l2d-test-*' ) );
+
+		$result = $updater->pre_download_package(
+			false,
+			$package,
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertSame( 'l2dwpghul_invalid_package_url', $result->get_error_code() );
+		$this->assertCount( 0, $updater->requested_calls );
+		$this->assertCount( $before, glob( sys_get_temp_dir() . '/l2d-test-*' ) );
+		$this->assertStringNotContainsString( 'secret-token', $result->get_error_message() );
+		if ( is_string( $package ) && '' !== $package ) {
+			$this->assertStringNotContainsString( $package, $result->get_error_message() );
+		}
+	}
+
+	/**
+	 * 許可されない URL の一覧.
+	 *
+	 * @return array<string, array{0: mixed}>
+	 */
+	public function provider_disallowed_package_urls() {
+		$ok = 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999';
+
+		return array(
+			'http スキーム'            => array( 'http://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'別ホスト'                 => array( 'https://example.com/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'前方一致するホスト'       => array( 'https://api.github.com.evil.example/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'ポート付き'               => array( 'https://api.github.com:8443/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'ユーザー情報付き'         => array( 'https://user:pass@api.github.com/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'ユーザー名のみ'           => array( 'https://api.github.com@evil.example/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'クエリ付き'               => array( $ok . '?x=1' ),
+			'フラグメント付き'         => array( $ok . '#frag' ),
+			'数値でない ID'            => array( 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/abc' ),
+			'末尾スラッシュ'           => array( $ok . '/' ),
+			'別リポジトリ'             => array( 'https://api.github.com/repos/lunaluna/other-plugin/releases/assets/999' ),
+			'別 owner'                 => array( 'https://api.github.com/repos/evil/fake-plugin/releases/assets/999' ),
+			'パスが別の API'           => array( 'https://api.github.com/repos/lunaluna/fake-plugin/zipball/main' ),
+			'browser_download_url 形式' => array( 'https://github.com/lunaluna/fake-plugin/releases/download/1.2.0/fake-plugin.1.2.0.zip' ),
+			'空文字'                   => array( '' ),
+			'文字列でない'             => array( array( $ok ) ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): owner / repo の大文字小文字は区別せずに許可すること.
+	 */
+	public function test_pre_download_package_allows_case_insensitive_repo() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => 'zip-bytes',
+		);
+
+		$result = $updater->pre_download_package(
+			false,
+			'https://API.GitHub.com/repos/LunaLuna/Fake-Plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertIsString( $result );
+		$this->assertCount( 1, $updater->requested_calls );
+	}
+
+	/**
+	 * pre_download_package() を、許可された URL で 1 回呼ぶ.
+	 *
+	 * @param TestableGitHubUpdater $updater 対象.
+	 * @return mixed 戻り値.
+	 */
+	private function call_pre_download( TestableGitHubUpdater $updater ) {
+		return $updater->pre_download_package(
+			false,
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+	}
+
+	/**
+	 * pre_download_package(): ダウンロードが失敗したら、使った一時ファイルが残らないこと.
+	 *
+	 * @dataProvider provider_failed_downloads
+	 *
+	 * @param array|WP_Error $response スタブするレスポンス.
+	 */
+	public function test_pre_download_package_deletes_tempfile_on_failure( $response ) {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = $response;
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$written = $updater->requested_calls[0]['args']['filename'];
+		$this->assertFileDoesNotExist( $written );
+	}
+
+	/**
+	 * 失敗するダウンロードの一覧.
+	 *
+	 * @return array<string, array{0: array|WP_Error}>
+	 */
+	public function provider_failed_downloads() {
+		return array(
+			'WP_Error'          => array( new WP_Error( 'http_request_failed', 'timeout' ) ),
+			'HTTP 404'          => array(
+				array(
+					'response' => array( 'code' => 404 ),
+					'body'     => '{"message":"Not Found"}',
+				),
+			),
+			'HTTP 401'          => array(
+				array(
+					'response' => array( 'code' => 401 ),
+					'body'     => '{"message":"Bad credentials"}',
+				),
+			),
+			'200 で 0 バイト'   => array(
+				array(
+					'response' => array( 'code' => 200 ),
+					'body'     => '',
+				),
+			),
+		);
+	}
+
+	/**
+	 * pre_download_package(): 成功時は一時ファイルを残すこと(コアが展開後に消す).
+	 */
+	public function test_pre_download_package_keeps_tempfile_on_success() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => 'zip-bytes',
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertFileExists( $result );
+		$this->assertSame( 'zip-bytes', file_get_contents( $result ) );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+	}
+
+	/**
+	 * pre_download_package(): 0 バイトのときのエラーコードが専用のものであること.
+	 */
+	public function test_pre_download_package_reports_empty_download() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => '',
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertSame( 'l2dwpghul_empty_download', $result->get_error_code() );
+	}
+
+	/**
+	 * 3xx(Location 付き)のレスポンスを組み立てる.
+	 *
+	 * @param string|null $location Location ヘッダーの値. null ならヘッダーなし.
+	 * @param int         $code     ステータスコード.
+	 * @return array
+	 */
+	private function redirect_response( $location, $code = 302 ) {
+		return array(
+			'response' => array( 'code' => $code ),
+			'headers'  => null === $location ? array() : array( 'location' => $location ),
+			'body'     => 'redirect',
+		);
+	}
+
+	/**
+	 * ステータスと本文だけのレスポンスを組み立てる.
+	 *
+	 * @param int    $code ステータスコード.
+	 * @param string $body 本文.
+	 * @return array
+	 */
+	private function simple_response( $code, $body = '' ) {
+		return array(
+			'response' => array( 'code' => $code ),
+			'body'     => $body,
+		);
+	}
+
+	/**
+	 * pre_download_package(): リダイレクトを手動で追い、Authorization は Assets API 宛ての
+	 * 1 回目だけに付き、リダイレクト先(2 回目)には付かないこと.
+	 */
+	public function test_pre_download_package_does_not_send_token_to_redirect_target() {
+		$signed                  = 'https://release-assets.githubusercontent.com/github-production-release-asset/1?sig=abc';
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( $signed ),
+			$this->simple_response( 200, 'zip-bytes' ),
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertSame( 'zip-bytes', file_get_contents( $result ) );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+
+		$calls = $updater->requested_calls;
+		$this->assertCount( 2, $calls );
+
+		// 1 回目: Assets API. トークン付きで、リダイレクトは自動で追わせない.
+		$this->assertSame( 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999', $calls[0]['url'] );
+		$this->assertSame( 'Bearer secret-token', $calls[0]['args']['headers']['Authorization'] );
+		$this->assertSame( 0, $calls[0]['args']['redirection'] );
+
+		// 2 回目: 署名付き URL. トークンなし、安全でない URL を拒否する設定付き.
+		$this->assertSame( $signed, $calls[1]['url'] );
+		$this->assertArrayNotHasKey( 'Authorization', $calls[1]['args']['headers'] );
+		$this->assertArrayHasKey( 'User-Agent', $calls[1]['args']['headers'] );
+		$this->assertTrue( $calls[1]['args']['reject_unsafe_urls'] );
+		$this->assertArrayNotHasKey( 'redirection', $calls[1]['args'] );
+		$this->assertStringNotContainsString( 'secret-token', serialize( $calls[1] ) );
+	}
+
+	/**
+	 * pre_download_package(): 1 回目で 200 が直接返ったら、2 回目は送らないこと.
+	 */
+	public function test_pre_download_package_single_request_when_200_directly() {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array( $this->simple_response( 200, 'zip-bytes' ) );
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertCount( 1, $updater->requested_calls );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+	}
+
+	/**
+	 * pre_download_package(): 2 回目が失敗したら WP_Error で、一時ファイルが残らないこと.
+	 *
+	 * @dataProvider provider_failed_second_requests
+	 *
+	 * @param array|WP_Error $second 2 回目のレスポンス.
+	 */
+	public function test_pre_download_package_fails_when_second_request_fails( $second ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( 'https://release-assets.githubusercontent.com/x?sig=abc' ),
+			$second,
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertCount( 2, $updater->requested_calls );
+		$this->assertFileDoesNotExist( $updater->requested_calls[0]['args']['filename'] );
+		$this->assertStringNotContainsString( 'secret-token', $result->get_error_message() );
+	}
+
+	/**
+	 * 2 回目の失敗パターン.
+	 *
+	 * @return array<string, array{0: array|WP_Error}>
+	 */
+	public function provider_failed_second_requests() {
+		return array(
+			'WP_Error'        => array( new WP_Error( 'http_request_failed', 'timeout' ) ),
+			'HTTP 403'        => array( array( 'response' => array( 'code' => 403 ), 'body' => 'denied' ) ),
+			'HTTP 500'        => array( array( 'response' => array( 'code' => 500 ), 'body' => 'error' ) ),
+			'200 で 0 バイト' => array( array( 'response' => array( 'code' => 200 ), 'body' => '' ) ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): Location が無い・http・相対パス・パース不能のとき、
+	 * 2 回目を送らずに WP_Error となり、一時ファイルが残らないこと.
+	 *
+	 * @dataProvider provider_invalid_locations
+	 *
+	 * @param string|null $location Location ヘッダーの値.
+	 */
+	public function test_pre_download_package_rejects_invalid_redirect_location( $location ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( $location ),
+			$this->simple_response( 200, 'should-not-be-fetched' ),
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertSame( 'l2dwpghul_invalid_redirect', $result->get_error_code() );
+		$this->assertCount( 1, $updater->requested_calls );
+		$this->assertFileDoesNotExist( $updater->requested_calls[0]['args']['filename'] );
+	}
+
+	/**
+	 * 追ってはいけない Location の一覧.
+	 *
+	 * @return array<string, array{0: string|null}>
+	 */
+	public function provider_invalid_locations() {
+		return array(
+			'Location なし'   => array( null ),
+			'空文字'          => array( '' ),
+			'http スキーム'   => array( 'http://release-assets.githubusercontent.com/x' ),
+			'相対パス'        => array( '/download/x.zip' ),
+			'スキーム相対'    => array( '//evil.example/x.zip' ),
+			'ホストなし'      => array( 'https:///x.zip' ),
+			'パース不能'      => array( 'https://' ),
+			'file スキーム'   => array( 'file:///etc/passwd' ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): 1 回目が 3xx 以外の 200 以外のとき、2 回目を送らないこと.
+	 *
+	 * @dataProvider provider_first_request_error_codes
+	 *
+	 * @param int $code ステータスコード.
+	 */
+	public function test_pre_download_package_no_second_request_on_first_error( $code ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array( $this->simple_response( $code, 'error' ) );
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertCount( 1, $updater->requested_calls );
+		$this->assertFileDoesNotExist( $updater->requested_calls[0]['args']['filename'] );
+	}
+
+	/**
+	 * 1 回目のエラーステータス.
+	 *
+	 * @return array<string, array{0: int}>
+	 */
+	public function provider_first_request_error_codes() {
+		return array(
+			'401' => array( 401 ),
+			'403' => array( 403 ),
+			'404' => array( 404 ),
+			'500' => array( 500 ),
+			'199' => array( 199 ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): 1 回目が WP_Error のとき、2 回目を送らないこと.
+	 */
+	public function test_pre_download_package_no_second_request_on_first_wp_error() {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array( new WP_Error( 'http_request_failed', 'timeout' ) );
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertCount( 1, $updater->requested_calls );
+	}
+
+	/**
+	 * pre_download_package(): 301 / 303 / 307 / 308 でも Location を追うこと.
+	 *
+	 * @dataProvider provider_redirect_codes
+	 *
+	 * @param int $code ステータスコード.
+	 */
+	public function test_pre_download_package_follows_any_3xx( $code ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( 'https://release-assets.githubusercontent.com/x?sig=abc', $code ),
+			$this->simple_response( 200, 'zip-bytes' ),
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertCount( 2, $updater->requested_calls );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+	}
+
+	/**
+	 * リダイレクトのステータス.
+	 *
+	 * @return array<string, array{0: int}>
+	 */
+	public function provider_redirect_codes() {
+		return array(
+			'301' => array( 301 ),
+			'302' => array( 302 ),
+			'303' => array( 303 ),
+			'307' => array( 307 ),
+			'308' => array( 308 ),
+		);
 	}
 }

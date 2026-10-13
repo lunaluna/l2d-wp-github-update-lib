@@ -23,4 +23,11 @@ runs:
         VERSION=$(grep -E '^[[:space:]]*\*[[:space:]]*Version:' "${SLUG}.php" \
           | head -n1 | sed -E 's/.*Version:[[:space:]]*//' | tr -d '\r')
 
-        echo "zip_name=${SLUG}.${VERSION}.zip" >> "$GITHUB_OUTPUT"
+        ZIP_NAME="${SLUG}.${VERSION}.zip"
+
+        # 生成した ZIP に開発用・機密のファイルが入っていないか検査する(入っていたらここで失敗する).
+        # github.action_path は、この action が取得されたディレクトリ(利用側リポジトリから
+        # uses: ...@タグ で呼ばれても、このリポジトリのそのタグのファイルを指す).
+        bash "${{ github.action_path }}/check-zip-contents.sh" "$ZIP_NAME" "$SLUG"
+
+        echo "zip_name=${ZIP_NAME}" >> "$GITHUB_OUTPUT"

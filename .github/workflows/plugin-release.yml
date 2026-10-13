@@ -50,7 +50,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Resolve tag and version
         id: resolve
@@ -72,14 +72,14 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Verify version consistency
-        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/verify-version@1.2.0
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/verify-version@1.3.0
         with:
           version: ${{ steps.resolve.outputs.version }}
           files: ${{ inputs.version_files }}
 
       - name: Set up PHP
         if: inputs.php_version != ''
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ inputs.php_version }}
           tools: composer:v2
@@ -97,11 +97,11 @@ jobs:
 
       - name: Build distribution ZIP
         id: build
-        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/build-zip@1.2.0
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/build-zip@1.3.0
 
       - name: Extract release notes
         id: notes
-        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/release-notes@1.2.0
+        uses: lunaluna/l2d-wp-github-update-lib/.github/actions/release-notes@1.3.0
         with:
           source: ${{ inputs.notes_source }}
           version: ${{ steps.resolve.outputs.version }}

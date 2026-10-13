@@ -107,14 +107,38 @@ function wp_json_encode( $data ) {
 }
 
 /**
- * wp_tempnam() のスタブ. 実ファイルは作らず、識別可能なダミーパスを返す.
+ * wp_tempnam() のスタブ. sys_get_temp_dir() に実際に空ファイルを作って返す.
+ * 一時ファイルの削除(file_exists() で残っていないこと)を検証できるようにするため.
  *
  * @param string $filename 元になるファイル名.
  * @param string $dir      ディレクトリ(未使用).
- * @return string ダミーの一時ファイルパス.
+ * @return string|false 作成した一時ファイルのパス.
  */
 function wp_tempnam( $filename = '', $dir = '' ) {
-	return '/tmp/l2d-test-tempfile-' . md5( (string) $filename );
+	return tempnam( sys_get_temp_dir(), 'l2d-test-' );
+}
+
+/**
+ * wp_delete_file() のスタブ. ファイルが存在すれば削除する.
+ *
+ * @param string $file 削除するファイルのパス.
+ * @return void
+ */
+function wp_delete_file( $file ) {
+	if ( is_string( $file ) && file_exists( $file ) ) {
+		unlink( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テスト用スタブの実装そのもの.
+	}
+}
+
+/**
+ * wp_parse_url() のスタブ. parse_url() の薄いラッパー.
+ *
+ * @param string $url       解析する URL.
+ * @param int    $component 取得する要素(-1 なら全要素).
+ * @return mixed 解析結果. 解析できなければ false.
+ */
+function wp_parse_url( $url, $component = -1 ) {
+	return parse_url( (string) $url, $component ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- テスト用スタブの実装そのもの.
 }
 
 /**
@@ -199,6 +223,22 @@ function wp_remote_retrieve_response_code( $response ) {
  */
 function wp_remote_retrieve_body( $response ) {
 	return isset( $response['body'] ) ? (string) $response['body'] : '';
+}
+
+/**
+ * wp_remote_retrieve_header() のスタブ. ヘッダー名は大文字小文字を区別せず探す.
+ *
+ * @param array  $response テスト用の疑似レスポンス配列(headers は連想配列).
+ * @param string $header   ヘッダー名.
+ * @return string ヘッダーの値. 無ければ空文字.
+ */
+function wp_remote_retrieve_header( $response, $header ) {
+	foreach ( (array) ( $response['headers'] ?? array() ) as $name => $value ) {
+		if ( 0 === strcasecmp( (string) $name, (string) $header ) ) {
+			return is_array( $value ) ? (string) reset( $value ) : (string) $value;
+		}
+	}
+	return '';
 }
 
 /**

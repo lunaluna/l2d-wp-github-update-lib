@@ -21,6 +21,15 @@ class TestableGitHubUpdater extends L2dwpghul_GitHub_Updater {
 	public $stub_response;
 
 	/**
+	 * http_get() が呼び出し順に返すレスポンスの待ち行列. 空でなければ stub_response より優先して
+	 * 先頭から1件ずつ取り出す. 複数回の HTTP 呼び出し(リダイレクトを手動で追う処理など)を
+	 * 1回ずつ別のレスポンスで検証するために使う. 既存テストは stub_response のまま動く.
+	 *
+	 * @var array<int, array|WP_Error>
+	 */
+	public $stub_responses = array();
+
+	/**
 	 * http_get() に渡された URL の記録.
 	 *
 	 * @var string[]
@@ -45,6 +54,16 @@ class TestableGitHubUpdater extends L2dwpghul_GitHub_Updater {
 			'url'  => $url,
 			'args' => $args,
 		);
-		return $this->stub_response;
+
+		// 待ち行列があれば先頭を、無ければ固定レスポンスを使う.
+		$response = $this->stub_responses ? array_shift( $this->stub_responses ) : $this->stub_response;
+
+		// stream + filename が指定されていれば、実際の WordPress と同じく本文をファイルへ書き出す.
+		// ステータスに関係なく書く(3xx や 4xx でも小さな本文が書かれるため). WP_Error のときは書かない.
+		if ( is_array( $response ) && ! empty( $args['stream'] ) && ! empty( $args['filename'] ) ) {
+			file_put_contents( $args['filename'], isset( $response['body'] ) ? (string) $response['body'] : '' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- テスト用スタブ.
+		}
+
+		return $response;
 	}
 }
