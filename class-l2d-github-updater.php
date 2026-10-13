@@ -529,12 +529,25 @@ class L2dwpghul_GitHub_Updater {
 	 * Bearer トークンを認識しない)、Assets API + Accept: application/octet-stream
 	 * が必要なことを Step A8 で実機確認した.
 	 *
+	 * 選択規則(1.3.0 で厳格化。更新元の GitHub アカウントが侵害されても、意図しない ZIP を
+	 * 拾いにくくするため):
+	 * - 文字列の $pattern: アセット名が「{$pattern}.{タグの版}.zip」と大文字小文字を含めて
+	 *   完全一致するものだけが候補. 版は tag_name から normalize_version() で求める
+	 *   (先頭の v は除く). 正規表現の semver ではなく文字列の完全一致にしているのは、
+	 *   "1.0.0-RC14" や "1.5.2.1" のように semver に収まらない正規のタグも通すため.
+	 *   版の一致の検証も兼ねる.
+	 * - callable の $pattern: $name を渡した戻り値が真のものが候補. callable を使う理由は
+	 *   「命名規約が違う」ことなので、版の一致は検証しない.
+	 * - 候補がちょうど 1 件のときだけその URL を返す. 0 件・2 件以上は null
+	 *   (GitHub は同じ Release に同名アセットを置けないので、文字列では 2 件以上は起きない
+	 *   見込み. 防御として「先頭を採用」はしない).
+	 *
 	 * @param array           $body        GitHub API のレスポンスボディ（デコード済み連想配列）.
-	 * @param string|callable $pattern     文字列なら前方一致文字列として扱い、
+	 * @param string|callable $pattern     文字列なら上記の完全一致のスラッグ部分、
 	 *                                     callable なら $name を渡した戻り値の真偽で判定する.
 	 * @param bool            $use_api_url true なら asset.url を、false なら
 	 *                                     asset.browser_download_url を返す.
-	 * @return string|null 見つかった ZIP の URL。見つからなければ null.
+	 * @return string|null 一意に決まった ZIP の URL。見つからない・複数一致なら null.
 	 */
 	public static function extract_zip_url( $body, $pattern, $use_api_url = false ) {
 		// assets が配列でなければ(文字列など)、(array) キャストで配列化せず候補なしとして扱う.
@@ -542,8 +555,20 @@ class L2dwpghul_GitHub_Updater {
 			return null;
 		}
 
+		$expected_name = null;
+
+		if ( ! is_callable( $pattern ) ) {
+			// 文字列のときは版が決まらないと期待するアセット名を作れないため、候補なしとする.
+			if ( ! isset( $body['tag_name'] ) || ! is_string( $body['tag_name'] ) || '' === $body['tag_name'] ) {
+				return null;
+			}
+			$expected_name = $pattern . '.' . self::normalize_version( $body['tag_name'] ) . '.zip';
+		}
+
+		$candidates = array();
+
 		foreach ( $body['assets'] as $asset ) {
-			// 各アセットは配列で、name / URL は文字列のときだけ使う(型の崩れた要素は飛ばす).
+			// 各アセットは配列で、name / URL は文字列のときだけ使う(型の崩れた要素は候補に数えない).
 			if ( ! is_array( $asset ) ) {
 				continue;
 			}
@@ -557,16 +582,16 @@ class L2dwpghul_GitHub_Updater {
 
 			$name = ( isset( $asset['name'] ) && is_string( $asset['name'] ) ) ? $asset['name'] : '';
 
-			$matches = is_callable( $pattern )
+			$matches = null === $expected_name
 				? (bool) call_user_func( $pattern, $name )
-				: ( 0 === strpos( $name, (string) $pattern ) && '.zip' === substr( $name, -4 ) );
+				: $name === $expected_name;
 
 			if ( $matches ) {
-				return $download_url;
+				$candidates[] = $download_url;
 			}
 		}
 
-		return null;
+		return 1 === count( $candidates ) ? $candidates[0] : null;
 	}
 
 	/**
