@@ -266,9 +266,15 @@ class L2dwpghul_GitHub_Updater {
 	 *
 	 * 通常は build-zip.sh の規約(zip 内ルートディレクトリ名 = スラッグ)により
 	 * 発生しないが、他人が作った zip 命名にも耐えるための多層防御として追加する。
-	 * extract_zip_url() の fail closed(スラッグ前方一致必須)が第一の防壁で、
+	 * extract_zip_url() の fail closed(アセット名の完全一致必須)が第一の防壁で、
 	 * これは第二の防壁。$hook_extra['plugin'] が自分の basename のときだけ
 	 * 働かせ、他プラグインの更新を壊さないようにする.
+	 *
+	 * リネームの前に、展開されたディレクトリにプラグインのメインファイルがあることも確認する.
+	 * 単体更新(Plugin_Upgrader::upgrade())ではコアがパッケージの中身を検査しないため、
+	 * 無関係な ZIP が展開されてプラグインが置き換わるのを、ここで止める.
+	 * Plugin Name ヘッダーの照合はしない(不一致でも続行するなら防御にならず、
+	 * 本番で error_log() を出す前例もないため).
 	 *
 	 * @param string|WP_Error $source        リネーム前のソースディレクトリパス.
 	 * @param string          $remote_source  展開直後のリモートソースパス(未使用).
@@ -285,13 +291,22 @@ class L2dwpghul_GitHub_Updater {
 			return $source;
 		}
 
+		global $wp_filesystem;
+
+		// 展開されたディレクトリ直下にメインファイルが無ければ、置き換えを中止する.
+		// $source === $desired_source の早期 return より前に判定する(リネーム不要でも確認するため).
+		if ( ! $wp_filesystem->exists( trailingslashit( $source ) . basename( $this->plugin_file ) ) ) {
+			return new WP_Error(
+				'l2dwpghul_invalid_package',
+				sprintf( 'パッケージに %s が含まれていないため、更新を中止しました.', basename( $this->plugin_file ) )
+			);
+		}
+
 		$desired_source = trailingslashit( dirname( untrailingslashit( $source ) ) ) . $this->slug . '/';
 
 		if ( $source === $desired_source ) {
 			return $source;
 		}
-
-		global $wp_filesystem;
 
 		if ( ! $wp_filesystem->move( $source, $desired_source, true ) ) {
 			return new WP_Error(

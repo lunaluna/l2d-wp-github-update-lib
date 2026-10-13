@@ -954,6 +954,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_rename_source_directory_renames_when_plugin_matches_and_name_differs() {
 		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( '/tmp/wp-upgrade/wrong-dir-name/fake-plugin.php' );
 
 		$result = $updater->rename_source_directory(
 			'/tmp/wp-upgrade/wrong-dir-name/',
@@ -999,6 +1000,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_rename_source_directory_skips_when_name_already_matches() {
 		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( '/tmp/wp-upgrade/fake-plugin/fake-plugin.php' );
 
 		$result = $updater->rename_source_directory(
 			'/tmp/wp-upgrade/fake-plugin/',
@@ -1034,6 +1036,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_rename_source_directory_returns_wp_error_on_move_failure() {
 		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( '/tmp/wp-upgrade/wrong-dir-name/fake-plugin.php' );
 		$GLOBALS['wp_filesystem']->move_should_fail = true;
 
 		$result = $updater->rename_source_directory(
@@ -1044,6 +1047,59 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		);
 
 		$this->assertInstanceOf( 'WP_Error', $result );
+	}
+
+	/**
+	 * 展開されたディレクトリにメインファイルが無いとき、WP_Error で中止すること
+	 * (名前が一致していてもリネームが必要でも確認する). move() は呼ばない.
+	 *
+	 * @dataProvider provider_source_directories
+	 *
+	 * @param string $source 展開直後のソースディレクトリ.
+	 */
+	public function test_rename_source_directory_aborts_when_main_file_missing( $source ) {
+		$updater = $this->make_updater();
+		$GLOBALS['wp_filesystem']->existing_paths = array( $source . 'readme.txt' );
+
+		$result = $updater->rename_source_directory(
+			$source,
+			$source,
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertSame( 'l2dwpghul_invalid_package', $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['wp_filesystem']->moved_calls );
+	}
+
+	/**
+	 * メインファイルの有無を確認するソースディレクトリ(名前が一致 / 不一致).
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public function provider_source_directories() {
+		return array(
+			'名前が一致'   => array( '/tmp/wp-upgrade/fake-plugin/' ),
+			'名前が不一致' => array( '/tmp/wp-upgrade/wrong-dir-name/' ),
+		);
+	}
+
+	/**
+	 * 他のプラグインの更新では、メインファイルの確認をせず介入しないこと.
+	 */
+	public function test_rename_source_directory_does_not_check_main_file_for_other_plugins() {
+		$updater = $this->make_updater();
+		// existing_paths は空(メインファイルなし)のまま.
+
+		$result = $updater->rename_source_directory(
+			'/tmp/wp-upgrade/other-plugin/',
+			'/tmp/wp-upgrade/other-plugin/',
+			new stdClass(),
+			array( 'plugin' => 'other-plugin/other-plugin.php' )
+		);
+
+		$this->assertSame( '/tmp/wp-upgrade/other-plugin/', $result );
 	}
 
 	// -------------------------------------------------------------------------
