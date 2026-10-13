@@ -35,15 +35,18 @@ $l2dwpghul_updater_register( array(
 | `backoff_ttl` | | `1800` |
 | `allow_prerelease` | | `false` |
 | `token` | | `''` |
-| `asset_pattern` | | `$slug` 前方一致 + `.zip` 後方一致(callable も可) |
+| `asset_pattern` | | `{$slug}.{タグの版}.zip` との完全一致(callable も可) |
 
 `cache_key` / `filter_prefix` は、既存の独自更新機構からこのライブラリへ移行する際に使う。既存実装が使っていたトランジェントキー名・フィルタ名をそのまま指定すれば、移行後も既存のキャッシュや `add_filter` 済みのコードをそのまま引き継げる(省略するとライブラリ共通の名前になり、移行前のキャッシュ・フィルタとは別物として動く)。フィルタの詳細は [フィルタ](#フィルタ) を参照。
 
-`asset_pattern` は Release のアセットが複数あり、スラッグの前方一致では本体 ZIP を選べない場合に使う。callable を渡すと `extract_zip_url()` がアセットごとに `$name`(アセットのファイル名、例 `my-plugin.1.0.0.zip`)を渡して呼び出し、その戻り値が真になった最初のアセットの URL を採用する。
+`asset_pattern` は、Release のアセットから本体 ZIP を選ぶ規則を決める。
+
+- **文字列(既定は `$slug`)**: アセット名が `{パターン}.{タグの版}.zip` と**完全一致**するものだけを採用する。タグの版は `tag_name` の先頭の `v` を除いたもの(`v1.2.0` → `1.2.0`)。正規表現の semver ではなく文字列の完全一致なので、`1.0.0-RC14` や `1.5.2.1` のような semver に収まらないタグでも、アセット名が同じ版で作られていれば通る。アセット名の版がタグと食い違う Release は、更新なしとして扱われる(別の版の ZIP を掴まないための検証を兼ねる)。`my-plugin-dev.zip` や `my-plugin.1.2.0.zip.sha256` のような、スラッグで始まるだけの別名は採用しない
+- **callable**: `extract_zip_url()` がアセットごとに `$name`(アセットのファイル名、例 `my-plugin.1.0.0.zip`)を渡して呼び出し、戻り値が真になったアセットを候補にする。命名規約が違う場合のための逃げ道なので、版の一致は検証しない。**候補がちょうど 1 件のときだけ**採用し、複数に一致したら更新なしとして扱う(1.3.0 で変更。それまでは先頭を採用していた)
 
 ```php
 'asset_pattern' => function ( $name ) {
-	return 'my-plugin' === substr( $name, 0, 10 ) && '.zip' === substr( $name, -4 );
+	return 'my-plugin.' === substr( $name, 0, 10 ) && '.zip' === substr( $name, -4 ) && 'vendor-pdf.zip' !== $name;
 },
 ```
 
@@ -51,7 +54,28 @@ $l2dwpghul_updater_register( array(
 
 `token` を設定すると、プライベートリポジトリからの更新に対応する。GitHub API リクエストに `Authorization: Bearer <token>` を付け、配布アセットの URL は `asset.browser_download_url` ではなく `asset.url`(Assets API のエンドポイント)を使う。これは `browser_download_url`(github.com の配布ドメイン)が `Authorization` ヘッダーを認識せず 404 になるためで、Assets API URL に `Accept: application/octet-stream` を付ける方式のみがプライベートリポジトリで機能することを実機で確認している。
 
-WordPress コアの `download_url()` にはヘッダーを渡す手段が無いため、`upgrader_pre_download` フィルタでダウンロード処理自体を短絡し、`token` 付きで自前ダウンロードして一時ファイルパスを返す。`token` は `wp-config.php` の定数から渡すこと(DB に既定で保存する設計にはしていない)。
+WordPress コアの `download_url()` にはヘッダーを渡す手段が無いため、`upgrader_pre_download` フィルタでダウンロード処理自体を短絡し、`token` 付きで自前ダウンロードして一時ファイルパスを返す。このとき、トークンの漏えいを防ぐために次の制限をかけている(1.3.0 から)。
+
+- トークンを付けて送るのは `https://api.github.com/repos/{github_repo}/releases/assets/{数値 ID}` だけ。ポート・ユーザー情報・クエリ付きの URL や、別のリポジトリ・別のホストの URL には、トークンも通信も送らずに中止する
+- Assets API は、署名付きの配布 URL へリダイレクトで返す。WordPress の HTTP クライアント(Requests)はリダイレクト時に元のリクエストヘッダー(`Authorization` を含む)をそのまま次へ渡すため、1 回目はリダイレクトを追わずに受け取り、`Location` を検証したうえで、`Authorization` を付けずに取得し直す
+- ダウンロードに失敗したとき(通信エラー・200 以外・0 バイト)は、一時ファイルを削除する
+
+#### トークンの扱い(必ず守ること)
+
+- **トークンをプラグインのソースに直書きしない。** 配布 ZIP に入り、そのプラグインを入れたすべてのサイトに漏れる。`wp-config.php` に定数として定義し、設定キーにはその定数を渡す(DB には保存しない)
+
+  ```php
+  // wp-config.php
+  define( 'MY_PLUGIN_GITHUB_TOKEN', 'github_pat_...' );
+
+  // プラグイン側
+  'token' => defined( 'MY_PLUGIN_GITHUB_TOKEN' ) ? MY_PLUGIN_GITHUB_TOKEN : '',
+  ```
+
+- **最小権限にする。** GitHub の Fine-grained personal access token を使い、対象リポジトリを更新元の 1 つだけにして、リポジトリの権限は Contents の読み取りのみにする
+- **有効期限を設定する。** 期限切れ・失効後は更新の確認が失敗してバックオフに入り、**更新通知が静かに止まる**(画面にエラーは出ない)。期限の前にローテーションする: ① 新しいトークンを発行する → ② `wp-config.php` の定数を差し替える → ③ 古いトークンを失効する
+- **漏えいが疑われたら、GitHub 側で即座に失効する。** このライブラリはトークンを保存せず `wp-config.php` の値を使うだけなので、失効すれば使えなくなる。その後、新しいトークンを発行して定数を差し替える
+- WordPress の仕組み上、他のプラグインが `http_api_debug` アクションや `http_request_args` フィルタなどでリクエストヘッダー(`Authorization` を含む)を読める。これはこのライブラリでは防げない。信頼できないプラグインを同じサイトに入れない
 
 `basename` / `version` / `requires` / `requires_php` / `tested` / `name` / `author` は `plugin_file` から `plugin_basename()` と `get_file_data()` で導出される。
 
@@ -77,6 +101,13 @@ if ( $filter_prefix ) {
 ### 更新の入口
 
 `Update URI: false` をヘッダーに指定した上で使うことを前提とする。`pre_set_site_transient_update_plugins` / `plugins_api` / `upgrader_process_complete` を直接フックし、wp.org 公式ルート(`update_plugins_{$hostname}`)は使わない。
+
+## 設計上の注意(信頼境界)
+
+- **より高い版を名乗るコピーが、全プラグインの設定を受け取る。** バージョン交渉では、同じサイトに入っているすべての同梱コピーのうち最も高い版のコピーが、登録されたすべてのプラグインの `$config`(`token` を含む)をインスタンス化する。同梱コピーはサイトのプラグインディレクトリにある PHP コードなので、そこに書き込める権限があれば何でもできるという前提と同じ境界の話だが、「自分のプラグインが同梱していない版のコードが `token` を受け取る」ことは理解しておく
+- 登録された設定は、グローバル変数 `$l2dwpghul_updater_registry['configs']` に入る。同じ PHP プロセスで動く他のコードからも、`token` を含めて読める(PHP の仕組み上避けられない)
+- 1.3.0 の厳格化(アセット名の完全一致・ダウンロード先 URL の検証・展開後のメインファイル確認)は、**まだ更新していない利用側プラグインの設定にも、1.3.0 のコピーが採用された時点で適用される**。サイト内の 1 つでも 1.3.0 を同梱していれば、全プラグインに効く
+- フォーク・改変して使う場合は、関数名・クラス名・グローバル変数名のプレフィックスと、クラス名 `L2dwpghul_GitHub_Updater` を変える。変えないと、元のライブラリのコピーとバージョン交渉で混ざる
 
 ## 契約の凍結事項
 
@@ -152,6 +183,9 @@ lib/l2d-updater/
 6. **`release.yml` の両 job(`verify-loader-version` / `publish-dist`)が成功することを確認する** — タグ push で自動起動し、`dist/loader.php` の自己申告バージョンとタグが一致しないと `verify-loader-version` が `::error::` で失敗する。このリポジトリでタグを打つ際の**唯一の自動ゲート**なので、ここで失敗したら Release を作らず先に修正する。`publish-dist` はその後 `dist-X.Y.Z` タグを自動生成する
 7. `git ls-tree -r --name-only dist-X.Y.Z` が上記4ファイルのみを返すことを確認する
 8. `gh release create X.Y.Z --title X.Y.Z --notes "..."` で GitHub Release を手動作成する(ライブラリであり配布用 ZIP は不要なので、ビルド・アセット添付は行わない)
+
+
+**外部 Actions の固定と ZIP 検査(1.3.0 から)**: `ci.yml` / `release.yml` / `plugin-release.yml` の外部 Actions(`actions/checkout` など)はコミット SHA で固定している(行末の `# vX.Y.Z` は版のコメント)。更新は Dependabot(`.github/dependabot.yml`、週次)の PR で行い、SHA は `git ls-remote --tags <リポジトリ>` で確認する(注釈付きタグは `^{}` の行がコミット)。`build-zip` の composite action は、生成した ZIP に `{slug}/.git/` / `{slug}/.github/` / `{slug}/tests/` / `{slug}/node_modules/` や、`.env` で終わるファイルが入っていると失敗する(`vendor/` 配下の依存パッケージ由来のファイルは対象外)。失敗したら、利用側の `.distignore` を直してからリリースし直す。
 
 ### 利用側プラグインへの反映
 

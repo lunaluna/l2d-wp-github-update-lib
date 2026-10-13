@@ -21,6 +21,8 @@
 
 **なぜこの手順が必須か**: `dist/loader.php` の自己申告バージョン文字列は、複数プラグインが異なる版のこのライブラリを同梱していても最新版だけが起動する、というバージョン交渉ロジック(`dist/loader.php` の `l2dwpghul_updater_boot()`)の判定基準そのもの。この文字列の更新を忘れてタグだけ打つと、古いライブラリコードが新しいと誤認識され続け、静かに古い版が勝ち続ける実害に直結する(2026-08-19、WPMAR の更新機構修正の横展開調査で発見・修正済み)。
 
+**外部 Actions の固定と ZIP 検査(1.3.0 から)**: `ci.yml` / `release.yml` / `plugin-release.yml` の外部 Actions(`actions/checkout` など)はコミット SHA で固定している(行末の `# vX.Y.Z` は版のコメント)。更新は Dependabot(`.github/dependabot.yml`、週次)の PR で行い、SHA は `git ls-remote --tags <リポジトリ>` で確認する(注釈付きタグは `^{}` の行がコミット)。`build-zip` の composite action は、生成した ZIP に `{slug}/.git/` / `{slug}/.github/` / `{slug}/tests/` / `{slug}/node_modules/` や、`.env` で終わるファイルが入っていると失敗する(`vendor/` 配下の依存パッケージ由来のファイルは対象外)。失敗したら、利用側の `.distignore` を直してからリリースし直す。
+
 ## 利用側プラグインへの反映(絶対のルール)
 
 **このライブラリをリリースしただけでは、同梱している各プラグイン(FAUC など)には自動反映されない。** 利用側プラグインへ反映する場合は、利用側プラグインのリポジトリで以下の2箇所を必ず更新すること。
