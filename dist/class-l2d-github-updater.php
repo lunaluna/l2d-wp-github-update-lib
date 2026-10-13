@@ -449,7 +449,9 @@ class L2dwpghul_GitHub_Updater {
 			? $this->pick_first_non_draft_release( $body )
 			: $body;
 
-		if ( ! is_array( $release_data ) || empty( $release_data['tag_name'] ) ) {
+		// 型まで検証する. tag_name が配列などだと normalize_version() の (string) キャストで
+		// "Array" + 警告になり、壊れたバージョンがキャッシュされてしまうため.
+		if ( ! is_array( $release_data ) || ! isset( $release_data['tag_name'] ) || ! is_string( $release_data['tag_name'] ) || '' === $release_data['tag_name'] ) {
 			return null;
 		}
 
@@ -461,8 +463,8 @@ class L2dwpghul_GitHub_Updater {
 		return array(
 			'version'      => self::normalize_version( $release_data['tag_name'] ),
 			'zip_url'      => $zip_url,
-			'notes'        => isset( $release_data['body'] ) ? (string) $release_data['body'] : '',
-			'published_at' => isset( $release_data['published_at'] ) ? (string) $release_data['published_at'] : '',
+			'notes'        => ( isset( $release_data['body'] ) && is_string( $release_data['body'] ) ) ? $release_data['body'] : '',
+			'published_at' => ( isset( $release_data['published_at'] ) && is_string( $release_data['published_at'] ) ) ? $release_data['published_at'] : '',
 		);
 	}
 
@@ -535,15 +537,25 @@ class L2dwpghul_GitHub_Updater {
 	 * @return string|null 見つかった ZIP の URL。見つからなければ null.
 	 */
 	public static function extract_zip_url( $body, $pattern, $use_api_url = false ) {
-		foreach ( (array) ( isset( $body['assets'] ) ? $body['assets'] : array() ) as $asset ) {
-			$url_field    = $use_api_url ? 'url' : 'browser_download_url';
-			$download_url = isset( $asset[ $url_field ] ) ? $asset[ $url_field ] : '';
+		// assets が配列でなければ(文字列など)、(array) キャストで配列化せず候補なしとして扱う.
+		if ( ! is_array( $body ) || ! isset( $body['assets'] ) || ! is_array( $body['assets'] ) ) {
+			return null;
+		}
 
-			if ( empty( $download_url ) ) {
+		foreach ( $body['assets'] as $asset ) {
+			// 各アセットは配列で、name / URL は文字列のときだけ使う(型の崩れた要素は飛ばす).
+			if ( ! is_array( $asset ) ) {
 				continue;
 			}
 
-			$name = isset( $asset['name'] ) ? (string) $asset['name'] : '';
+			$url_field    = $use_api_url ? 'url' : 'browser_download_url';
+			$download_url = ( isset( $asset[ $url_field ] ) && is_string( $asset[ $url_field ] ) ) ? $asset[ $url_field ] : '';
+
+			if ( '' === $download_url ) {
+				continue;
+			}
+
+			$name = ( isset( $asset['name'] ) && is_string( $asset['name'] ) ) ? $asset['name'] : '';
 
 			$matches = is_callable( $pattern )
 				? (bool) call_user_func( $pattern, $name )

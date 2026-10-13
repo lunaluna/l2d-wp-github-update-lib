@@ -442,6 +442,147 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		$this->assertSame( $transient, $result );
 	}
 
+	/**
+	 * 異常なレスポンスのとき、更新なしになりバックオフ(空配列)がキャッシュされること.
+	 *
+	 * @dataProvider provider_abnormal_responses
+	 *
+	 * @param array|WP_Error $response スタブするレスポンス.
+	 */
+	public function test_abnormal_response_results_in_backoff( $response ) {
+		$updater                = $this->make_updater();
+		$updater->stub_response = $response;
+
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+		$result    = $updater->check_for_update( $transient );
+
+		$this->assertSame( $transient, $result );
+		$this->assertSame( array(), $GLOBALS['l2d_test_site_transients']['l2dwpghul_updater_' . md5( 'lunaluna/fake-plugin' )] );
+	}
+
+	/**
+	 * 異常レスポンスの一覧(HTTP ステータス・タイムアウト・不正な本文・型の崩れたフィールド).
+	 *
+	 * @return array<string, array{0: array|WP_Error}>
+	 */
+	public function provider_abnormal_responses() {
+		$cases = array();
+
+		foreach ( array( 401, 403, 404, 429, 500, 503 ) as $code ) {
+			$cases[ 'HTTP ' . $code ] = array(
+				array(
+					'response' => array( 'code' => $code ),
+					'body'     => wp_json_encode( array( 'message' => 'error' ) ),
+				),
+			);
+		}
+
+		$cases['WP_Error(タイムアウト想定)'] = array( new WP_Error( 'http_request_failed', 'cURL error 28' ) );
+
+		$json = function ( $body ) {
+			return array(
+				'response' => array( 'code' => 200 ),
+				'body'     => $body,
+			);
+		};
+
+		$cases['空ボディ']          = array( $json( '' ) );
+		$cases['不正な JSON']       = array( $json( '{broken' ) );
+		$cases['JSON が null']      = array( $json( 'null' ) );
+		$cases['JSON が数値']       = array( $json( '123' ) );
+		$cases['JSON が文字列']     = array( $json( '"text"' ) );
+		$cases['tag_name が配列']   = array( $json( wp_json_encode( $this->release_body( array( 'tag_name' => array( 'v1.2.0' ) ) ) ) ) );
+		$cases['tag_name が数値']   = array( $json( wp_json_encode( $this->release_body( array( 'tag_name' => 120 ) ) ) ) );
+		$cases['tag_name が空']     = array( $json( wp_json_encode( $this->release_body( array( 'tag_name' => '' ) ) ) ) );
+		$cases['assets が文字列']   = array( $json( wp_json_encode( $this->release_body( array( 'assets' => 'fake-plugin.1.2.0.zip' ) ) ) ) );
+		$cases['asset が文字列のみ'] = array( $json( wp_json_encode( $this->release_body( array( 'assets' => array( 'fake-plugin.1.2.0.zip' ) ) ) ) ) );
+		$cases['asset の name が配列'] = array(
+			$json(
+				wp_json_encode(
+					$this->release_body(
+						array(
+							'assets' => array(
+								array(
+									'name'                 => array( 'fake-plugin.1.2.0.zip' ),
+									'browser_download_url' => 'https://example.com/fake-plugin.1.2.0.zip',
+								),
+							),
+						)
+					)
+				)
+			),
+		);
+		$cases['asset の URL が配列'] = array(
+			$json(
+				wp_json_encode(
+					$this->release_body(
+						array(
+							'assets' => array(
+								array(
+									'name'                 => 'fake-plugin.1.2.0.zip',
+									'browser_download_url' => array( 'https://example.com/x.zip' ),
+								),
+							),
+						)
+					)
+				)
+			),
+		);
+
+		return $cases;
+	}
+
+	/**
+	 * body / published_at が文字列でないとき、空文字として扱い、警告を出さないこと.
+	 */
+	public function test_non_string_notes_and_published_at_become_empty_strings() {
+		$updater                = $this->make_updater();
+		$updater->stub_response = $this->ok_response(
+			$this->release_body(
+				array(
+					'body'         => array( 'x' ),
+					'published_at' => 12345,
+				)
+			)
+		);
+
+		$result = $updater->plugin_info( false, 'plugin_information', (object) array( 'slug' => 'fake-plugin' ) );
+
+		$this->assertSame( '', $result->last_updated );
+	}
+
+	/**
+	 * バックオフ中は、HTTP ステータスにかかわらず再リクエストしないこと.
+	 */
+	public function test_backoff_blocks_further_requests_after_error_status() {
+		$updater                = $this->make_updater();
+		$updater->stub_response = array(
+			'response' => array( 'code' => 429 ),
+			'body'     => '',
+		);
+		$transient = (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) );
+
+		$updater->check_for_update( $transient );
+		$updater->check_for_update( $transient );
+
+		$this->assertCount( 1, $updater->requested_urls );
+	}
+
+	/**
+	 * トークン付きで失敗しても、エラー系の副作用(キャッシュ)にトークンが混入しないこと.
+	 */
+	public function test_token_is_not_leaked_into_cache_on_failure() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token-xyz' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 401 ),
+			'body'     => '',
+		);
+
+		$updater->check_for_update( (object) array( 'checked' => array( 'fake-plugin/fake-plugin.php' => '1.0.0' ) ) );
+
+		$this->assertStringNotContainsString( 'secret-token-xyz', serialize( $GLOBALS['l2d_test_site_transients'] ) );
+	}
+
 	// -------------------------------------------------------------------------
 	// plugin_info()
 	// -------------------------------------------------------------------------
