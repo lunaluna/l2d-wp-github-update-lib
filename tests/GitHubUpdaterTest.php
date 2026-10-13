@@ -69,6 +69,18 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 * @return array
 	 */
 	private function release_body( array $overrides = array() ) {
+		// tag_name だけを上書きしたときは、1.3.0 以降の完全一致の規則(アセット名 = スラッグ.タグの版.zip)に
+		// 合わせて、アセット名もタグの版から導出する.
+		if ( isset( $overrides['tag_name'] ) && ! isset( $overrides['assets'] ) && is_string( $overrides['tag_name'] ) ) {
+			$asset_name          = 'fake-plugin.' . L2dwpghul_GitHub_Updater::normalize_version( $overrides['tag_name'] ) . '.zip';
+			$overrides['assets'] = array(
+				array(
+					'name'                 => $asset_name,
+					'browser_download_url' => 'https://example.com/' . $asset_name,
+				),
+			);
+		}
+
 		return array_merge(
 			array(
 				'tag_name'     => 'v1.2.0',
@@ -108,11 +120,12 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	}
 
 	/**
-	 * extract_zip_url() がプラグインスラッグで始まる .zip アセットの
+	 * extract_zip_url() が「{スラッグ}.{タグの版}.zip」と完全一致するアセットの
 	 * ダウンロード URL を選ぶことを確認する.
 	 */
 	public function test_extract_zip_url_picks_matching_asset() {
 		$body = array(
+			'tag_name' => 'v1.2.0',
 			'assets' => array(
 				array(
 					'name'                 => 'source-code.zip',
@@ -137,6 +150,7 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 	 */
 	public function test_extract_zip_url_returns_null_when_no_match() {
 		$body = array(
+			'tag_name' => 'v1.2.0',
 			'assets' => array(
 				array(
 					'name'                 => 'source-code.zip',
@@ -181,6 +195,155 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		$this->assertSame(
 			'https://example.com/fake-plugin.1.2.0.zip',
 			L2dwpghul_GitHub_Updater::extract_zip_url( $body, $pattern )
+		);
+	}
+
+	/**
+	 * 指定した名前のアセットだけを持つリリースボディを作る.
+	 *
+	 * @param string   $tag   tag_name.
+	 * @param string[] $names アセット名の一覧.
+	 * @return array
+	 */
+	private function body_with_assets( $tag, array $names ) {
+		$assets = array();
+		foreach ( $names as $name ) {
+			$assets[] = array(
+				'name'                 => $name,
+				'browser_download_url' => 'https://example.com/' . $name,
+			);
+		}
+		return array(
+			'tag_name' => $tag,
+			'assets'   => $assets,
+		);
+	}
+
+	/**
+	 * 前方一致だけで通っていた名前(別名の ZIP・チェックサム・版の不一致)を拒否すること.
+	 *
+	 * @dataProvider provider_rejected_asset_names
+	 *
+	 * @param string $name アセット名.
+	 */
+	public function test_extract_zip_url_rejects_non_exact_names( $name ) {
+		$body = $this->body_with_assets( 'v1.2.0', array( $name ) );
+
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * 拒否すべきアセット名の一覧(タグは 1.2.0 の想定).
+	 *
+	 * @return array<string, array{0: string}>
+	 */
+	public function provider_rejected_asset_names() {
+		return array(
+			'別名の ZIP'              => array( 'fake-plugin-dev.zip' ),
+			'チェックサム'            => array( 'fake-plugin.1.2.0.zip.sha256' ),
+			'プレリリース表記の別版'  => array( 'fake-plugin.1.2.0-beta.zip' ),
+			'版の不一致'              => array( 'fake-plugin.1.1.0.zip' ),
+			'版なし'                  => array( 'fake-plugin.zip' ),
+			'大文字小文字の違い'      => array( 'Fake-Plugin.1.2.0.zip' ),
+		);
+	}
+
+	/**
+	 * semver に収まらないタグ(WPMAR の実例)でも、完全一致なら採用すること.
+	 *
+	 * @dataProvider provider_non_semver_tags
+	 *
+	 * @param string $tag     tag_name.
+	 * @param string $version アセット名に入る版.
+	 */
+	public function test_extract_zip_url_accepts_non_semver_tags( $tag, $version ) {
+		$name = 'fake-plugin.' . $version . '.zip';
+		$body = $this->body_with_assets( $tag, array( 'vendor-pdf.zip', $name ) );
+
+		$this->assertSame( 'https://example.com/' . $name, L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * 通すべきタグの一覧.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public function provider_non_semver_tags() {
+		return array(
+			'素の semver'      => array( '1.2.0', '1.2.0' ),
+			'v 接頭辞'         => array( 'v1.2.0', '1.2.0' ),
+			'4 桁'             => array( '1.5.2.1', '1.5.2.1' ),
+			'RC 表記'          => array( '1.0.0-RC14', '1.0.0-RC14' ),
+		);
+	}
+
+	/**
+	 * 文字列パターンで tag_name が無い・文字列でないときは、版が決まらないので null になること.
+	 */
+	public function test_extract_zip_url_returns_null_without_valid_tag_name() {
+		$body = $this->body_with_assets( '1.2.0', array( 'fake-plugin.1.2.0.zip' ) );
+
+		unset( $body['tag_name'] );
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+
+		$body['tag_name'] = array( '1.2.0' );
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * 同名アセットが複数あるとき(防御)、先頭を採らずに null になること.
+	 */
+	public function test_extract_zip_url_returns_null_on_duplicate_exact_names() {
+		$body = $this->body_with_assets( '1.2.0', array( 'fake-plugin.1.2.0.zip', 'fake-plugin.1.2.0.zip' ) );
+
+		$this->assertNull( L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin' ) );
+	}
+
+	/**
+	 * callable は複数のアセットに一致したら、先頭を採らずに null になること(1.3.0 の挙動変更).
+	 * 一致が 1 件なら、版の検証なしでその URL を返す.
+	 */
+	public function test_extract_zip_url_callable_requires_unique_match() {
+		$body = $this->body_with_assets( '1.2.0', array( 'a.zip', 'b.zip', 'c.txt' ) );
+
+		$this->assertNull(
+			L2dwpghul_GitHub_Updater::extract_zip_url(
+				$body,
+				function ( $name ) {
+					return '.zip' === substr( $name, -4 );
+				}
+			)
+		);
+
+		$this->assertSame(
+			'https://example.com/b.zip',
+			L2dwpghul_GitHub_Updater::extract_zip_url(
+				$body,
+				function ( $name ) {
+					return 'b.zip' === $name;
+				}
+			)
+		);
+	}
+
+	/**
+	 * Assets API 経路(トークン利用時)でも、完全一致の規則で asset.url を返すこと.
+	 */
+	public function test_extract_zip_url_uses_api_url_with_exact_match() {
+		$body = array(
+			'tag_name' => '1.2.0',
+			'assets'   => array(
+				array(
+					'name'                 => 'fake-plugin.1.2.0.zip',
+					'url'                  => 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/1',
+					'browser_download_url' => 'https://example.com/fake-plugin.1.2.0.zip',
+				),
+			),
+		);
+
+		$this->assertSame(
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/1',
+			L2dwpghul_GitHub_Updater::extract_zip_url( $body, 'fake-plugin', true )
 		);
 	}
 
