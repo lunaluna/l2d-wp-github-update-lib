@@ -364,15 +364,28 @@ class L2dwpghul_GitHub_Updater {
 			)
 		);
 
+		// 失敗時は一時ファイルを必ず削除する. コアの download_url() は失敗時に unlink() するが、
+		// upgrader_pre_download で短絡したこの経路ではコアが消してくれないため、ここで消す.
+		// 成功時は消さない(展開後にコアが $download !== $package の場合に削除する).
 		if ( is_wp_error( $response ) ) {
+			wp_delete_file( $tmpfname );
 			return $response;
 		}
 
 		if ( 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+			wp_delete_file( $tmpfname );
 			return new WP_Error(
 				'l2dwpghul_download_failed',
 				sprintf( 'パッケージのダウンロードに失敗しました(HTTP %d).', wp_remote_retrieve_response_code( $response ) )
 			);
+		}
+
+		// 200 でも中身が空のファイルは壊れた ZIP になるだけなので失敗として扱う.
+		clearstatcache( true, $tmpfname );
+		$size = filesize( $tmpfname );
+		if ( false === $size || 0 === $size ) {
+			wp_delete_file( $tmpfname );
+			return new WP_Error( 'l2dwpghul_empty_download', 'ダウンロードしたパッケージが空でした.' );
 		}
 
 		return $tmpfname;

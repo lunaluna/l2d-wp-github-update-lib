@@ -1367,4 +1367,99 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 		$this->assertIsString( $result );
 		$this->assertCount( 1, $updater->requested_calls );
 	}
+
+	/**
+	 * pre_download_package() を、許可された URL で 1 回呼ぶ.
+	 *
+	 * @param TestableGitHubUpdater $updater 対象.
+	 * @return mixed 戻り値.
+	 */
+	private function call_pre_download( TestableGitHubUpdater $updater ) {
+		return $updater->pre_download_package(
+			false,
+			'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+	}
+
+	/**
+	 * pre_download_package(): ダウンロードが失敗したら、使った一時ファイルが残らないこと.
+	 *
+	 * @dataProvider provider_failed_downloads
+	 *
+	 * @param array|WP_Error $response スタブするレスポンス.
+	 */
+	public function test_pre_download_package_deletes_tempfile_on_failure( $response ) {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = $response;
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$written = $updater->requested_calls[0]['args']['filename'];
+		$this->assertFileDoesNotExist( $written );
+	}
+
+	/**
+	 * 失敗するダウンロードの一覧.
+	 *
+	 * @return array<string, array{0: array|WP_Error}>
+	 */
+	public function provider_failed_downloads() {
+		return array(
+			'WP_Error'          => array( new WP_Error( 'http_request_failed', 'timeout' ) ),
+			'HTTP 404'          => array(
+				array(
+					'response' => array( 'code' => 404 ),
+					'body'     => '{"message":"Not Found"}',
+				),
+			),
+			'HTTP 401'          => array(
+				array(
+					'response' => array( 'code' => 401 ),
+					'body'     => '{"message":"Bad credentials"}',
+				),
+			),
+			'200 で 0 バイト'   => array(
+				array(
+					'response' => array( 'code' => 200 ),
+					'body'     => '',
+				),
+			),
+		);
+	}
+
+	/**
+	 * pre_download_package(): 成功時は一時ファイルを残すこと(コアが展開後に消す).
+	 */
+	public function test_pre_download_package_keeps_tempfile_on_success() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => 'zip-bytes',
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertFileExists( $result );
+		$this->assertSame( 'zip-bytes', file_get_contents( $result ) );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+	}
+
+	/**
+	 * pre_download_package(): 0 バイトのときのエラーコードが専用のものであること.
+	 */
+	public function test_pre_download_package_reports_empty_download() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => '',
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertSame( 'l2dwpghul_empty_download', $result->get_error_code() );
+	}
 }
