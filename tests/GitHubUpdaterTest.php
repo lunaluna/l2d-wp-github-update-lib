@@ -1462,4 +1462,241 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 
 		$this->assertSame( 'l2dwpghul_empty_download', $result->get_error_code() );
 	}
+
+	/**
+	 * 3xx(Location 付き)のレスポンスを組み立てる.
+	 *
+	 * @param string|null $location Location ヘッダーの値. null ならヘッダーなし.
+	 * @param int         $code     ステータスコード.
+	 * @return array
+	 */
+	private function redirect_response( $location, $code = 302 ) {
+		return array(
+			'response' => array( 'code' => $code ),
+			'headers'  => null === $location ? array() : array( 'location' => $location ),
+			'body'     => 'redirect',
+		);
+	}
+
+	/**
+	 * ステータスと本文だけのレスポンスを組み立てる.
+	 *
+	 * @param int    $code ステータスコード.
+	 * @param string $body 本文.
+	 * @return array
+	 */
+	private function simple_response( $code, $body = '' ) {
+		return array(
+			'response' => array( 'code' => $code ),
+			'body'     => $body,
+		);
+	}
+
+	/**
+	 * pre_download_package(): リダイレクトを手動で追い、Authorization は Assets API 宛ての
+	 * 1 回目だけに付き、リダイレクト先(2 回目)には付かないこと.
+	 */
+	public function test_pre_download_package_does_not_send_token_to_redirect_target() {
+		$signed                  = 'https://release-assets.githubusercontent.com/github-production-release-asset/1?sig=abc';
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( $signed ),
+			$this->simple_response( 200, 'zip-bytes' ),
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertSame( 'zip-bytes', file_get_contents( $result ) );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+
+		$calls = $updater->requested_calls;
+		$this->assertCount( 2, $calls );
+
+		// 1 回目: Assets API. トークン付きで、リダイレクトは自動で追わせない.
+		$this->assertSame( 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999', $calls[0]['url'] );
+		$this->assertSame( 'Bearer secret-token', $calls[0]['args']['headers']['Authorization'] );
+		$this->assertSame( 0, $calls[0]['args']['redirection'] );
+
+		// 2 回目: 署名付き URL. トークンなし、安全でない URL を拒否する設定付き.
+		$this->assertSame( $signed, $calls[1]['url'] );
+		$this->assertArrayNotHasKey( 'Authorization', $calls[1]['args']['headers'] );
+		$this->assertArrayHasKey( 'User-Agent', $calls[1]['args']['headers'] );
+		$this->assertTrue( $calls[1]['args']['reject_unsafe_urls'] );
+		$this->assertArrayNotHasKey( 'redirection', $calls[1]['args'] );
+		$this->assertStringNotContainsString( 'secret-token', serialize( $calls[1] ) );
+	}
+
+	/**
+	 * pre_download_package(): 1 回目で 200 が直接返ったら、2 回目は送らないこと.
+	 */
+	public function test_pre_download_package_single_request_when_200_directly() {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array( $this->simple_response( 200, 'zip-bytes' ) );
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertCount( 1, $updater->requested_calls );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+	}
+
+	/**
+	 * pre_download_package(): 2 回目が失敗したら WP_Error で、一時ファイルが残らないこと.
+	 *
+	 * @dataProvider provider_failed_second_requests
+	 *
+	 * @param array|WP_Error $second 2 回目のレスポンス.
+	 */
+	public function test_pre_download_package_fails_when_second_request_fails( $second ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( 'https://release-assets.githubusercontent.com/x?sig=abc' ),
+			$second,
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertCount( 2, $updater->requested_calls );
+		$this->assertFileDoesNotExist( $updater->requested_calls[0]['args']['filename'] );
+		$this->assertStringNotContainsString( 'secret-token', $result->get_error_message() );
+	}
+
+	/**
+	 * 2 回目の失敗パターン.
+	 *
+	 * @return array<string, array{0: array|WP_Error}>
+	 */
+	public function provider_failed_second_requests() {
+		return array(
+			'WP_Error'        => array( new WP_Error( 'http_request_failed', 'timeout' ) ),
+			'HTTP 403'        => array( array( 'response' => array( 'code' => 403 ), 'body' => 'denied' ) ),
+			'HTTP 500'        => array( array( 'response' => array( 'code' => 500 ), 'body' => 'error' ) ),
+			'200 で 0 バイト' => array( array( 'response' => array( 'code' => 200 ), 'body' => '' ) ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): Location が無い・http・相対パス・パース不能のとき、
+	 * 2 回目を送らずに WP_Error となり、一時ファイルが残らないこと.
+	 *
+	 * @dataProvider provider_invalid_locations
+	 *
+	 * @param string|null $location Location ヘッダーの値.
+	 */
+	public function test_pre_download_package_rejects_invalid_redirect_location( $location ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( $location ),
+			$this->simple_response( 200, 'should-not-be-fetched' ),
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertSame( 'l2dwpghul_invalid_redirect', $result->get_error_code() );
+		$this->assertCount( 1, $updater->requested_calls );
+		$this->assertFileDoesNotExist( $updater->requested_calls[0]['args']['filename'] );
+	}
+
+	/**
+	 * 追ってはいけない Location の一覧.
+	 *
+	 * @return array<string, array{0: string|null}>
+	 */
+	public function provider_invalid_locations() {
+		return array(
+			'Location なし'   => array( null ),
+			'空文字'          => array( '' ),
+			'http スキーム'   => array( 'http://release-assets.githubusercontent.com/x' ),
+			'相対パス'        => array( '/download/x.zip' ),
+			'スキーム相対'    => array( '//evil.example/x.zip' ),
+			'ホストなし'      => array( 'https:///x.zip' ),
+			'パース不能'      => array( 'https://' ),
+			'file スキーム'   => array( 'file:///etc/passwd' ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): 1 回目が 3xx 以外の 200 以外のとき、2 回目を送らないこと.
+	 *
+	 * @dataProvider provider_first_request_error_codes
+	 *
+	 * @param int $code ステータスコード.
+	 */
+	public function test_pre_download_package_no_second_request_on_first_error( $code ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array( $this->simple_response( $code, 'error' ) );
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertCount( 1, $updater->requested_calls );
+		$this->assertFileDoesNotExist( $updater->requested_calls[0]['args']['filename'] );
+	}
+
+	/**
+	 * 1 回目のエラーステータス.
+	 *
+	 * @return array<string, array{0: int}>
+	 */
+	public function provider_first_request_error_codes() {
+		return array(
+			'401' => array( 401 ),
+			'403' => array( 403 ),
+			'404' => array( 404 ),
+			'500' => array( 500 ),
+			'199' => array( 199 ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): 1 回目が WP_Error のとき、2 回目を送らないこと.
+	 */
+	public function test_pre_download_package_no_second_request_on_first_wp_error() {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array( new WP_Error( 'http_request_failed', 'timeout' ) );
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertCount( 1, $updater->requested_calls );
+	}
+
+	/**
+	 * pre_download_package(): 301 / 303 / 307 / 308 でも Location を追うこと.
+	 *
+	 * @dataProvider provider_redirect_codes
+	 *
+	 * @param int $code ステータスコード.
+	 */
+	public function test_pre_download_package_follows_any_3xx( $code ) {
+		$updater                 = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_responses = array(
+			$this->redirect_response( 'https://release-assets.githubusercontent.com/x?sig=abc', $code ),
+			$this->simple_response( 200, 'zip-bytes' ),
+		);
+
+		$result = $this->call_pre_download( $updater );
+
+		$this->assertIsString( $result );
+		$this->assertCount( 2, $updater->requested_calls );
+		unlink( $result ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- テストの後始末.
+	}
+
+	/**
+	 * リダイレクトのステータス.
+	 *
+	 * @return array<string, array{0: int}>
+	 */
+	public function provider_redirect_codes() {
+		return array(
+			'301' => array( 301 ),
+			'302' => array( 302 ),
+			'303' => array( 303 ),
+			'307' => array( 307 ),
+			'308' => array( 308 ),
+		);
+	}
 }
