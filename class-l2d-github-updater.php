@@ -351,13 +351,20 @@ class L2dwpghul_GitHub_Updater {
 			return new WP_Error( 'l2dwpghul_no_tempfile', '一時ファイルを作成できませんでした.' );
 		}
 
+		// 1 回目: Assets API へトークン付きで送る. redirection を 0 にして、リダイレクトを
+		// WordPress(Requests)に自動で追わせない. Requests はリダイレクト時に元のリクエスト
+		// ヘッダー(= Authorization)をそのまま次のリクエストへ渡し、外す処理が無いため
+		// (WordPress 7.1.2 同梱の Requests 2.0.17 の実ソースで確認)、トークンが
+		// リダイレクト先へ漏れるのを防ぐ目的で手動で追う. redirection が 0 のとき
+		// 3xx はエラーにならず、そのままレスポンスとして返る.
 		$response = $this->http_get(
 			$package,
 			array(
-				'timeout'  => 300,
-				'stream'   => true,
-				'filename' => $tmpfname,
-				'headers'  => array(
+				'timeout'     => 300,
+				'redirection' => 0,
+				'stream'      => true,
+				'filename'    => $tmpfname,
+				'headers'     => array(
 					'Authorization' => 'Bearer ' . $this->token,
 					'Accept'        => 'application/octet-stream',
 				),
@@ -372,11 +379,49 @@ class L2dwpghul_GitHub_Updater {
 			return $response;
 		}
 
-		if ( 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+		$code = (int) wp_remote_retrieve_response_code( $response );
+
+		// 3xx: 署名付き URL(release-assets.githubusercontent.com)へのリダイレクト.
+		// Location を検証したうえで、Authorization を付けずに取りに行く.
+		if ( $code >= 300 && $code < 400 ) {
+			$location = wp_remote_retrieve_header( $response, 'location' );
+
+			if ( ! $this->is_safe_redirect_location( $location ) ) {
+				wp_delete_file( $tmpfname );
+				return new WP_Error( 'l2dwpghul_invalid_redirect', 'ダウンロード先のリダイレクトが不正なため、ダウンロードを中止しました.' );
+			}
+
+			// 2 回目: トークンなし. 署名付き URL なので User-Agent だけで足りる見込み
+			// (Accept が要るかは実機確認の対象). reject_unsafe_urls を true にして、コアの
+			// download_url()(wp_safe_remote_get)と同様にリダイレクト先も検査させる.
+			// 2 回目以降のリダイレクトは WordPress の既定に任せる(トークンを付けていないので漏れない).
+			// 同じファイルへ書くと 'wb' で上書きされ、1 回目の 3xx の小さな本文は消える.
+			$response = $this->http_get(
+				$location,
+				array(
+					'timeout'            => 300,
+					'stream'             => true,
+					'filename'           => $tmpfname,
+					'reject_unsafe_urls' => true,
+					'headers'            => array(
+						'User-Agent' => 'l2d-wp-github-update-lib/' . $this->slug,
+					),
+				)
+			);
+
+			if ( is_wp_error( $response ) ) {
+				wp_delete_file( $tmpfname );
+				return $response;
+			}
+
+			$code = (int) wp_remote_retrieve_response_code( $response );
+		}
+
+		if ( 200 !== $code ) {
 			wp_delete_file( $tmpfname );
 			return new WP_Error(
 				'l2dwpghul_download_failed',
-				sprintf( 'パッケージのダウンロードに失敗しました(HTTP %d).', wp_remote_retrieve_response_code( $response ) )
+				sprintf( 'パッケージのダウンロードに失敗しました(HTTP %d).', $code )
 			);
 		}
 
@@ -389,6 +434,30 @@ class L2dwpghul_GitHub_Updater {
 		}
 
 		return $tmpfname;
+	}
+
+	/**
+	 * リダイレクト先(Location ヘッダー)として追ってよい値かを判定する.
+	 *
+	 * 許可するのは、スキームが https でホストを持つ絶対 URL だけ. 相対パスの Location は
+	 * 検証が複雑になるため拒否する(GitHub は絶対 URL を返すことを実測で確認済み).
+	 * 追った先でトークンは送らないので、ホストの許可リストは設けない(署名付き URL の
+	 * ドメインは GitHub 側の都合で変わりうるため).
+	 *
+	 * @param mixed $location Location ヘッダーの値.
+	 * @return bool 追ってよければ true.
+	 */
+	private function is_safe_redirect_location( $location ) {
+		if ( ! is_string( $location ) || '' === $location ) {
+			return false;
+		}
+
+		$parts = wp_parse_url( $location );
+
+		return is_array( $parts )
+			&& isset( $parts['scheme'], $parts['host'] )
+			&& 'https' === strtolower( $parts['scheme'] )
+			&& '' !== $parts['host'];
 	}
 
 	/**
