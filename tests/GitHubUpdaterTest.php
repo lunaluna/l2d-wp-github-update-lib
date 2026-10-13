@@ -1284,4 +1284,87 @@ class GitHubUpdaterTest extends PHPUnit\Framework\TestCase {
 
 		$this->assertInstanceOf( 'WP_Error', $result );
 	}
+
+	/**
+	 * pre_download_package(): 許可されない URL のときは、WP_Error を返し、HTTP 通信も
+	 * 一時ファイル作成もしないこと(トークンを送らない). エラーメッセージに URL・トークンも含めない.
+	 *
+	 * @dataProvider provider_disallowed_package_urls
+	 *
+	 * @param mixed $package 許可されないはずの URL.
+	 */
+	public function test_pre_download_package_rejects_disallowed_urls( $package ) {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => 'zip-bytes',
+		);
+
+		$before = count( glob( sys_get_temp_dir() . '/l2d-test-*' ) );
+
+		$result = $updater->pre_download_package(
+			false,
+			$package,
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertInstanceOf( 'WP_Error', $result );
+		$this->assertSame( 'l2dwpghul_invalid_package_url', $result->get_error_code() );
+		$this->assertCount( 0, $updater->requested_calls );
+		$this->assertCount( $before, glob( sys_get_temp_dir() . '/l2d-test-*' ) );
+		$this->assertStringNotContainsString( 'secret-token', $result->get_error_message() );
+		if ( is_string( $package ) && '' !== $package ) {
+			$this->assertStringNotContainsString( $package, $result->get_error_message() );
+		}
+	}
+
+	/**
+	 * 許可されない URL の一覧.
+	 *
+	 * @return array<string, array{0: mixed}>
+	 */
+	public function provider_disallowed_package_urls() {
+		$ok = 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999';
+
+		return array(
+			'http スキーム'            => array( 'http://api.github.com/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'別ホスト'                 => array( 'https://example.com/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'前方一致するホスト'       => array( 'https://api.github.com.evil.example/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'ポート付き'               => array( 'https://api.github.com:8443/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'ユーザー情報付き'         => array( 'https://user:pass@api.github.com/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'ユーザー名のみ'           => array( 'https://api.github.com@evil.example/repos/lunaluna/fake-plugin/releases/assets/999' ),
+			'クエリ付き'               => array( $ok . '?x=1' ),
+			'フラグメント付き'         => array( $ok . '#frag' ),
+			'数値でない ID'            => array( 'https://api.github.com/repos/lunaluna/fake-plugin/releases/assets/abc' ),
+			'末尾スラッシュ'           => array( $ok . '/' ),
+			'別リポジトリ'             => array( 'https://api.github.com/repos/lunaluna/other-plugin/releases/assets/999' ),
+			'別 owner'                 => array( 'https://api.github.com/repos/evil/fake-plugin/releases/assets/999' ),
+			'パスが別の API'           => array( 'https://api.github.com/repos/lunaluna/fake-plugin/zipball/main' ),
+			'browser_download_url 形式' => array( 'https://github.com/lunaluna/fake-plugin/releases/download/1.2.0/fake-plugin.1.2.0.zip' ),
+			'空文字'                   => array( '' ),
+			'文字列でない'             => array( array( $ok ) ),
+		);
+	}
+
+	/**
+	 * pre_download_package(): owner / repo の大文字小文字は区別せずに許可すること.
+	 */
+	public function test_pre_download_package_allows_case_insensitive_repo() {
+		$updater                = $this->make_updater( array( 'token' => 'secret-token' ) );
+		$updater->stub_response = array(
+			'response' => array( 'code' => 200 ),
+			'body'     => 'zip-bytes',
+		);
+
+		$result = $updater->pre_download_package(
+			false,
+			'https://API.GitHub.com/repos/LunaLuna/Fake-Plugin/releases/assets/999',
+			new stdClass(),
+			array( 'plugin' => 'fake-plugin/fake-plugin.php' )
+		);
+
+		$this->assertIsString( $result );
+		$this->assertCount( 1, $updater->requested_calls );
+	}
 }

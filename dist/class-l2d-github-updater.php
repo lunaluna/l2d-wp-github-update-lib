@@ -338,6 +338,13 @@ class L2dwpghul_GitHub_Updater {
 			return false;
 		}
 
+		// トークンを付けて送る前に、送信先が自分のリポジトリの Assets API であることを確認する.
+		// 一時ファイルの作成や HTTP 通信より前に判定する. false を返すとコアが同じ URL を
+		// 認証なしで取りに行くため、拒否は WP_Error で返す. メッセージには URL を含めない.
+		if ( ! $this->is_allowed_asset_api_url( $package ) ) {
+			return new WP_Error( 'l2dwpghul_invalid_package_url', 'パッケージの URL が許可された形式ではないため、ダウンロードを中止しました.' );
+		}
+
 		$tmpfname = wp_tempnam( $this->slug );
 
 		if ( ! $tmpfname ) {
@@ -369,6 +376,45 @@ class L2dwpghul_GitHub_Updater {
 		}
 
 		return $tmpfname;
+	}
+
+	/**
+	 * Authorization ヘッダー付きで取得してよい URL かを判定する.
+	 *
+	 * 許可するのは「https://api.github.com/repos/{github_repo}/releases/assets/{数値 ID}」だけ.
+	 * $package は upgrader_pre_download に渡される値で、他のフィルタや改ざんされたキャッシュ由来の
+	 * 任意の URL になりうるため、トークンの送信先を厳密に絞る. ホストは完全一致で比較し
+	 * (api.github.com.evil.example のような前方一致の抜けを防ぐ)、ポート・ユーザー情報・
+	 * クエリ・フラグメント・末尾スラッシュも許さない. owner/repo は GitHub 側で大文字小文字を
+	 * 区別しないため、小文字にそろえて設定値と比較する.
+	 *
+	 * @param mixed $url 判定する URL.
+	 * @return bool 許可された形式なら true.
+	 */
+	private function is_allowed_asset_api_url( $url ) {
+		if ( ! is_string( $url ) ) {
+			return false;
+		}
+
+		$parts = wp_parse_url( $url );
+
+		if ( ! is_array( $parts ) ) {
+			return false;
+		}
+
+		if ( isset( $parts['user'] ) || isset( $parts['pass'] ) || isset( $parts['port'] ) || isset( $parts['query'] ) || isset( $parts['fragment'] ) ) {
+			return false;
+		}
+
+		if ( ! isset( $parts['scheme'], $parts['host'], $parts['path'] ) || 'https' !== strtolower( $parts['scheme'] ) || 'api.github.com' !== strtolower( $parts['host'] ) ) {
+			return false;
+		}
+
+		if ( 1 !== preg_match( '#^/repos/([^/]+)/([^/]+)/releases/assets/[0-9]+$#', $parts['path'], $matches ) ) {
+			return false;
+		}
+
+		return strtolower( $matches[1] . '/' . $matches[2] ) === strtolower( (string) $this->github_repo );
 	}
 
 	/**
