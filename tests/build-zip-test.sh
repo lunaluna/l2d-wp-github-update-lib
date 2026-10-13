@@ -366,6 +366,60 @@ else
 	pass "前処理フックが exit 1 したらビルダーも失敗する(set -e の伝播)"
 fi
 
+# ---- シナリオ4: 生成 ZIP の内容検査(check-zip-contents.sh) -------------------
+#
+# 禁止パス(スラッグ直下の .git / .github / tests / node_modules、階層を問わない .env 終わり)を
+# 含む ZIP は失敗し、vendor/ 配下の正当な .github・tests と .env.example は許可されること.
+
+echo
+echo "シナリオ4: 生成 ZIP の内容検査"
+
+CHECKER="${REPO_ROOT}/.github/actions/build-zip/check-zip-contents.sh"
+SLUG4='fake-consumer-plugin-4'
+
+# 指定したファイルを持つ ZIP を作り、検査スクリプトの成否を返す.
+# 引数: ケース名 期待(ok|ng) ファイル...
+check_case() {
+	local label="$1" expect="$2"
+	shift 2
+	local dir="${WORK}/s4-${label//[^a-zA-Z0-9]/_}"
+	mkdir -p "${dir}/${SLUG4}"
+	echo '<?php' > "${dir}/${SLUG4}/${SLUG4}.php"
+	local f
+	for f in "$@"; do
+		mkdir -p "${dir}/${SLUG4}/$(dirname "$f")"
+		echo 'x' > "${dir}/${SLUG4}/${f}"
+	done
+	(cd "$dir" && zip -qr "${SLUG4}.zip" "$SLUG4")
+	local result=ok
+	if ! bash "$CHECKER" "${dir}/${SLUG4}.zip" "$SLUG4" > /dev/null 2>&1; then
+		result=ng
+	fi
+	if [ "$result" = "$expect" ]; then
+		pass "検査 ${label}: ${expect}"
+	else
+		fail "検査 ${label}: 期待 ${expect} だが ${result}"
+	fi
+}
+
+check_case "clean" ok readme.txt includes/class-a.php
+check_case "vendor 配下の .github と tests は許可" ok vendor/pkg/.github/workflows/ci.yml vendor/pkg/tests/ATest.php
+check_case ".env.example は許可" ok config/.env.example
+check_case "直下の .git" ng .git/config
+check_case "直下の .github" ng .github/workflows/ci.yml
+check_case "直下の tests" ng tests/ExampleTest.php
+check_case "直下の node_modules" ng node_modules/pkg/index.js
+check_case "直下の .env" ng .env
+check_case "階層下の .env" ng lib/config/.env
+check_case "production.env" ng production.env
+
+# 存在しない ZIP も失敗する.
+if bash "$CHECKER" "${WORK}/no-such.zip" "$SLUG4" > /dev/null 2>&1; then
+	fail "存在しない ZIP を渡しても検査が成功してしまった"
+else
+	pass "存在しない ZIP は失敗する"
+fi
+
 echo
 if [ "$FAILURES" -gt 0 ]; then
 	echo "FAILED: ${FAILURES} 件の検証が失敗しました." >&2
