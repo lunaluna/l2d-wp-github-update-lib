@@ -24,9 +24,9 @@ permissions:
 
 jobs:
   verify-loader-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Verify dist/loader.php's self-reported version matches the tag
         run: |
@@ -46,11 +46,11 @@ jobs:
 
   publish-dist:
     needs: verify-loader-version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write # dist ブランチ / dist タグの push に必要
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0 # subtree split は全履歴が必要
 
